@@ -30,8 +30,9 @@ variable "mig_zones" {
 }
 
 variable "billing_account_id" {
-  description = "GCP billing account ID the project is attached to (format: 'AAAAAA-BBBBBB-CCCCCC'). Required to create the google_billing_budget. Find via `gcloud beta billing accounts list`."
+  description = "GCP billing account ID the project is attached to (format: 'AAAAAA-BBBBBB-CCCCCC'). When set, enables the google_billing_budget cost guardrail; when empty (default), the budget resource is not created and cost alerting is left off. Find the ID via `gcloud beta billing accounts list`."
   type        = string
+  default     = ""
 }
 
 variable "monthly_budget_usd" {

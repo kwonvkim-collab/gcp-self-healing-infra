@@ -174,9 +174,11 @@ The GCS bucket that holds `terraform.tfstate` has **object versioning enabled** 
 
 Each `google_secret_manager_secret` has `lifecycle { prevent_destroy = true }` (Phase 3), so the secret resource itself cannot be wiped by `terraform destroy`. Individual *versions* stay disposable via `gcloud secrets versions disable|enable`: full procedure in [Runbook §5.3](Runbook.md#53-secret-version-restore).
 
-### Cost guardrail
+### Cost guardrail (opt-in)
 
 A `google_billing_budget` watches the project and alerts the on-call email channel (reused from Phase 2) at **50 / 90 / 100 %** of `var.monthly_budget_usd` (default `$5`). The budget amount is intentionally narrow — any steady-state spend above this is either a misconfiguration (accidental VM size bump, surprise egress) or a conscious scaling decision that should be explicit in a PR. Handling matrix: [Runbook §5.5](Runbook.md#55-billing-budget-alert).
+
+The budget is **opt-in**: set the `GCP_BILLING_ACCOUNT_ID` secret (format `AAAAAA-BBBBBB-CCCCCC`, from `gcloud beta billing accounts list`) to enable it. With the secret unset, `var.billing_account_id` defaults to `""` and the `google_billing_budget` resource is provisioned with `count = 0` — the rest of the stack deploys unchanged. Rationale: billing account IDs are account-scoped metadata (not per-environment), and some orgs treat them as confidential, so forcing the ID as a required variable would gate the whole stack on a secret operators may not want to provision.
 
 ## Quick Start
 
@@ -219,7 +221,7 @@ Add these to **Settings → Secrets and variables → Actions**:
 | `TF_VAR_CF_TUNNEL_TOKEN` | yes | Cloudflare Tunnel token |
 | `TF_VAR_db_password` | yes | PostgreSQL password |
 | `TF_VAR_n8n_encryption_key` | yes | n8n encryption key (random 32-char string) |
-| `GCP_BILLING_ACCOUNT_ID` | yes (Phase 4) | Billing account ID (`AAAAAA-BBBBBB-CCCCCC`), consumed by `google_billing_budget`. Find via `gcloud beta billing accounts list`. |
+| `GCP_BILLING_ACCOUNT_ID` | optional (Phase 4) | Billing account ID (`AAAAAA-BBBBBB-CCCCCC`). When set, enables the `google_billing_budget` cost guardrail at 50/90/100 % of `var.monthly_budget_usd`; when unset, the budget resource is simply not created. Find via `gcloud beta billing accounts list`. |
 | `SLACK_BOT_TOKEN` | optional | Slack bot OAuth token (`xoxb-…`). When set, Cloud Monitoring publishes alerts to `TF_VAR_slack_channel` in addition to email |
 
 **Variables (non-secret):**

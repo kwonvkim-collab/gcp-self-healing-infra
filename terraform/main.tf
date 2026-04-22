@@ -371,6 +371,12 @@ resource "google_compute_region_instance_group_manager" "mig" {
 # google_monitoring_notification_channel the SLO burn-rate alerts use
 # (see monitoring.tf) — one on-call inbox, one pager.
 resource "google_billing_budget" "monthly_cap" {
+  # Opt-in: leaving var.billing_account_id empty disables the budget
+  # entirely. The rest of the stack is project-scoped and does not need
+  # billing-account-level metadata, so requiring the ID would have
+  # forced operators to provision a secret they may not want. When the
+  # ID is provided, the budget provisions normally.
+  count           = var.billing_account_id != "" ? 1 : 0
   billing_account = var.billing_account_id
   display_name    = "n8n self-healing infra — monthly cap"
 
