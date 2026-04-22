@@ -33,14 +33,20 @@
 # ---
 # IMPORT-SAFE WORKFLOW
 # ---
-# For an existing instance, flipping `cloud_sql_managed = true` without
-# prior `terraform import` will attempt to *create* a second instance
-# with the same name (API error: ALREADY_EXISTS) or, worse, change
-# properties it thinks are unmanaged. The safe two-step procedure:
+# For an existing instance, flipping `cloud_sql_managed = true` and
+# applying without importing first will attempt to *create* a second
+# instance with the same name (API error: ALREADY_EXISTS). Running
+# `terraform import` before flipping the toggle fails the other way:
+# with `cloud_sql_managed = false` every resource below has `count = 0`,
+# so `google_sql_database_instance.main[0]` is not a valid import
+# target. The correct order is flip-then-import-then-plan-then-apply:
 #
-#   1. Keep `cloud_sql_managed = false`. Apply. No diff expected.
-#   2. Run one `terraform import` per resource below, using the existing
-#      instance's name and the project/region:
+#   1. Set `cloud_sql_managed = true` in .tfvars or TF_VAR_*, plus the
+#      matching `cloud_sql_instance_name`, `cloud_sql_private_network`,
+#      and `cloud_sql_tier`. Do NOT run `terraform apply` yet.
+#
+#   2. Import the three resources into state (their configs now exist
+#      because count = 1 after step 1):
 #
 #        terraform import 'google_sql_database_instance.main[0]' \
 #          "projects/${PROJECT}/instances/${INSTANCE_NAME}"
@@ -49,10 +55,14 @@
 #        terraform import 'google_sql_user.n8n[0]' \
 #          "${INSTANCE_NAME}/${DB_USER}"
 #
-#   3. Set `cloud_sql_managed = true`. Run `terraform plan` — expect
-#      `deletion_protection` to flip on and `backup_configuration` to
-#      adopt the declared schedule if it drifted. Review carefully,
-#      then apply.
+#   3. Run `terraform plan`. Expected diff: `deletion_protection`
+#      flips on, `backup_configuration.point_in_time_recovery_enabled`
+#      flips on if PITR was off, `database_flags` appears if slow-query
+#      logging wasn't set. Any "will be created" line for the instance
+#      means an import was missed — go back to step 2.
+#
+#   4. `terraform apply`. Settings changes are applied live; expect a
+#      ~30-60s connectivity blip when database_flags are updated.
 #
 # Full procedure with rollback steps: Runbook §5.6 Cloud SQL adoption.
 #

@@ -343,11 +343,14 @@ outside IaC; Terraform knew only its private IP via `var.db_host`.
 database, and the n8n user, gated behind `var.cloud_sql_managed`
 (default `false`).
 
-**This is a two-apply, read-then-write procedure.** Flipping the
-toggle without importing first will make Terraform try to *create*
-a second instance with the same name — the API will return
-`ALREADY_EXISTS` and the apply will fail mid-way through unrelated
-resources. Follow the steps in order:
+**This is a flip-then-import-then-apply procedure.** Flipping the
+toggle and running `terraform apply` without importing will make
+Terraform try to *create* a second instance with the same name — the
+API returns `ALREADY_EXISTS` and the apply fails mid-way. Running
+`terraform import` before flipping the toggle also fails: with
+`cloud_sql_managed = false` every resource has `count = 0`, so
+addresses like `google_sql_database_instance.main[0]` have no config
+to import into. The correct order:
 
 ```bash
 # 0. Prerequisite: ensure the existing Cloud SQL instance has a
@@ -360,9 +363,19 @@ INSTANCE_NAME=$(gcloud sql instances list \
 VPC_SELF_LINK=$(gcloud compute networks describe default \
     --format='value(selfLink)' --project="$PROJECT_ID")
 
-# 1. With var.cloud_sql_managed still false, import the three
-#    resources into Terraform state. Each is idempotent and safe
-#    to rerun.
+# 1. Flip the toggle and set the vars to match the live instance.
+#    The resources now exist in configuration (count = 1) but are
+#    not yet in state. In .tfvars or via TF_VAR_*:
+#      cloud_sql_managed         = true
+#      cloud_sql_instance_name   = "${INSTANCE_NAME}"
+#      cloud_sql_private_network = "${VPC_SELF_LINK}"
+#      cloud_sql_tier            = "<whatever the instance currently runs>"
+#    DO NOT run terraform apply yet — it would try to create a new
+#    instance with the same name and fail (ALREADY_EXISTS).
+
+# 2. Import the three resources into Terraform state. Each is
+#    idempotent; rerunning is safe. Because count = 1 after step 1,
+#    the [0] addresses now exist in configuration.
 cd terraform
 terraform import "google_sql_database_instance.main[0]" \
     "projects/${PROJECT_ID}/instances/${INSTANCE_NAME}"
@@ -371,13 +384,6 @@ terraform import "google_sql_database.n8n[0]" \
 terraform import "google_sql_user.n8n[0]" \
     "${INSTANCE_NAME}/${DB_USER}"
 
-# 2. Set the vars to match the live instance. In .tfvars or via
-#    TF_VAR_*:
-#      cloud_sql_managed         = true
-#      cloud_sql_instance_name   = "${INSTANCE_NAME}"
-#      cloud_sql_private_network = "${VPC_SELF_LINK}"
-#      cloud_sql_tier            = "<whatever the instance currently runs>"
-#
 # 3. DRY-RUN the plan. Expect:
 #      - `deletion_protection` to flip on (was false on an
 #        out-of-band-provisioned instance in most cases)
@@ -385,6 +391,8 @@ terraform import "google_sql_user.n8n[0]" \
 #        flip on if PITR was previously disabled
 #      - `database_flags` to appear if slow-query logging was off
 #    Any diff outside that set is drift — investigate before apply.
+#    If the plan shows "will be created" for the instance, state is
+#    missing an import — go back to step 2.
 terraform plan
 
 # 4. Apply. Cloud SQL settings changes are applied live — no
