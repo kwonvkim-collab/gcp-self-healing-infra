@@ -113,7 +113,7 @@ data "google_iam_workload_identity_pool_provider" "github" {
       error_message = <<-EOM
         WIF attribute_condition drift detected on provider '${var.wif_provider_id}' in pool '${var.wif_pool_id}'.
         expected: ${local.wif_expected_condition}
-        actual:   $${self.attribute_condition}
+        actual:   ${self.attribute_condition}
         Fix with: gcloud iam workload-identity-pools providers update-oidc ${var.wif_provider_id} \
           --location=global --workload-identity-pool=${var.wif_pool_id} --project=${var.project_id} \
           --attribute-condition='${local.wif_expected_condition}'
