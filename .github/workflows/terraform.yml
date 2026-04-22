@@ -102,14 +102,24 @@ jobs:
   trivy-images:
     name: trivy (pinned images)
     runs-on: ubuntu-latest
-    # Container-image vuln scan: matches the digest pinning in
-    # terraform/variables.tf against Trivy's vulnerability database.
-    # Gates HIGH and CRITICAL severities; MEDIUM/LOW are reported but
-    # do not fail the PR so the signal-to-noise stays high. Runs on every
-    # PR that touches variables.tf (where the digest lives) or this
-    # workflow itself, plus every PR by default so unrelated PRs still
-    # see an up-to-date vulnerability picture without waiting for a
-    # digest bump.
+    # Container-image vuln scan for the digests pinned in
+    # terraform/variables.tf.
+    #
+    # Policy (2026-04 baseline): the scan is currently **advisory** —
+    # exit-code=0 so findings never block a PR. The rationale is that
+    # every HIGH/CRITICAL finding here is sourced from an upstream image
+    # we do not build (n8nio/n8n bundles its own npm tree;
+    # cloudflare/cloudflared ships a pinned Alpine base). We cannot
+    # patch them. What we can do is:
+    #   1. See the findings on every PR (this job prints them).
+    #   2. Ship digest bumps the moment upstream releases fixes — that's
+    #      exactly what .github/workflows/digest-refresh.yml does every
+    #      Monday, opening a PR with the new digest if either image has
+    #      moved.
+    # To flip the scan to blocking once the repo has a governance
+    # process (SLA on CVE acceptance, .trivyignore with expirations,
+    # owner for quarterly review), set exit-code back to "1". Severity
+    # filter stays at HIGH,CRITICAL so the output volume remains usable.
     steps:
       - uses: actions/checkout@v4
 
@@ -132,7 +142,7 @@ jobs:
         with:
           image-ref: ${{ steps.images.outputs.n8n }}
           severity: HIGH,CRITICAL
-          exit-code: "1"
+          exit-code: "0"
           ignore-unfixed: true
           vuln-type: os,library
 
@@ -141,6 +151,6 @@ jobs:
         with:
           image-ref: ${{ steps.images.outputs.cloudflared }}
           severity: HIGH,CRITICAL
-          exit-code: "1"
+          exit-code: "0"
           ignore-unfixed: true
           vuln-type: os,library

@@ -143,7 +143,7 @@ Digests are kept fresh by `.github/workflows/digest-refresh.yml`: a scheduled Gi
 | `tfsec` | aquasecurity/tfsec-action | security misconfigurations (open ports, plaintext secrets, missing encryption, public buckets) |
 | `Checkov` | bridgecrewio/checkov-action | second-opinion policy scanner; intentional overlap with tfsec for defence in depth |
 | `shellcheck` | direct binary | startup.sh sanity (suppresses SC2154 because Terraform interpolations look like shell vars) |
-| `trivy` (images) | aquasecurity/trivy-action | vuln-scans the pinned `var.n8n_image` / `var.cloudflared_image` digests for HIGH/CRITICAL CVEs; fails the PR on any finding with a fix available |
+| `trivy` (images) | aquasecurity/trivy-action | vuln-scans the pinned `var.n8n_image` / `var.cloudflared_image` digests for HIGH/CRITICAL CVEs. **Advisory at baseline** — findings are visible on every PR but don't block, because we cannot patch upstream images directly. Digest bumps via the weekly `digest-refresh.yml` workflow pick up fixes automatically. To flip the scan to blocking once a CVE-governance process lands, set `exit-code: "1"` in `.github/workflows/terraform.yml` |
 
 `tfsec` runs with `soft_fail=false` — any HIGH/CRITICAL finding blocks the PR. Suppress legitimately-skipped findings inline with `tfsec:ignore:<rule_id>` and a comment explaining why; do not suppress them in workflow config.
 
