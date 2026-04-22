@@ -116,7 +116,7 @@ output "cloud_sql_private_ip" {
 }
 
 output "effective_db_host" {
-  description = "Actual DB host string rendered into the VM's docker-compose.yml. Equal to cloud_sql_private_ip when managed, else var.db_host. Useful for debugging 'n8n can't reach the DB' incidents: if this output is empty, the check block at cloud_sql.tf will have failed plan already."
+  description = "Actual DB host string rendered into the VM's docker-compose.yml. Equal to cloud_sql_private_ip when managed, else var.db_host. Useful for debugging 'n8n can't reach the DB' incidents: if this output is empty the lifecycle.precondition on google_compute_instance_template.tpl (main.tf) will have failed plan already."
   value       = local.effective_db_host
 }
 

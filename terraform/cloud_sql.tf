@@ -97,7 +97,7 @@ locals {
 
 # Guardrail note: the "neither managed nor var.db_host set" case is
 # caught at plan time by a lifecycle.precondition on
-# google_compute_instance_template.vm_tpl (see main.tf), not by a
+# google_compute_instance_template.tpl (see main.tf), not by a
 # top-level `check` block. Two reasons:
 #   * `check` blocks require Terraform 1.5+ *and* aws/tfsec currently
 #     refuses to parse them ("Unsupported block type"), which blocked
