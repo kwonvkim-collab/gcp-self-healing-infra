@@ -291,7 +291,7 @@ resource "google_compute_instance_template" "tpl" {
     # or a serial-console break-glass. Closes Checkov CKV_GCP_32.
     block-project-ssh-keys = "true"
     startup-script = templatefile("${path.module}/../scripts/startup.sh", {
-      db_host               = var.db_host
+      db_host               = local.effective_db_host
       db_user               = var.db_user
       DB_SECRET_NAME        = google_secret_manager_secret.db_password.secret_id
       N8N_KEY_SECRET_NAME   = google_secret_manager_secret.n8n_key.secret_id
