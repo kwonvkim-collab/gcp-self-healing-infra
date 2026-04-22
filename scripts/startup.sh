@@ -204,16 +204,37 @@ echo "=== Verifying n8n startup ==="
 # checks must succeed simultaneously in the same iteration, otherwise
 # the loop keeps waiting.
 HEALTHY=false
+# Track which probe was the last to fail so the CRITICAL message —
+# which feeds the n8n_startup_critical log-based metric and the on-call
+# pager — names the actually-failing component instead of blaming n8n
+# every time. The log-based metric filter in monitoring.tf matches on
+# the substring "CRITICAL: " so the counter keeps working regardless
+# of which of the two suffixes we print.
+last_fail="both n8n and cloudflared"
 # 60 попыток по 10 секунд = 10 минут ожидания
 for i in {1..60}; do
-  if curl -sf http://localhost:5678/healthz >/dev/null \
-     && docker exec "$(docker compose ps -q cloudflared)" \
-          wget -q -O /dev/null http://localhost:2000/ready 2>/dev/null; then
+  n8n_ok=false
+  cf_ok=false
+  if curl -sf http://localhost:5678/healthz >/dev/null; then
+    n8n_ok=true
+  fi
+  if docker exec "$(docker compose ps -q cloudflared)" \
+       wget -q -O /dev/null http://localhost:2000/ready 2>/dev/null; then
+    cf_ok=true
+  fi
+  if [ "$n8n_ok" = true ] && [ "$cf_ok" = true ]; then
     echo "✅ n8n + cloudflared are up and healthy"
     HEALTHY=true
     break
   fi
-  echo "⏳ Waiting for n8n + cloudflared to initialize ($i/60)..."
+  if [ "$n8n_ok" = false ] && [ "$cf_ok" = false ]; then
+    last_fail="both n8n and cloudflared"
+  elif [ "$n8n_ok" = false ]; then
+    last_fail="n8n"
+  else
+    last_fail="cloudflared"
+  fi
+  echo "⏳ Waiting for n8n + cloudflared to initialize ($i/60, last fail: $last_fail)..."
   sleep 10
 done
 
@@ -222,7 +243,13 @@ if [ "$HEALTHY" = true ]; then
   docker compose ps
   exit 0
 else
-  echo "❌ CRITICAL: n8n failed to start within 10 minutes"
+  # IMPORTANT: keep the exact substring "CRITICAL: startup failed" —
+  # the log-based metric n8n_startup_critical in terraform/monitoring.tf
+  # filters on it. The per-component detail ("n8n" / "cloudflared" /
+  # "both") follows after an em-dash so on-call can triage without
+  # opening logs, while the metric stays stable regardless of which
+  # component failed.
+  echo "❌ CRITICAL: startup failed — $last_fail did not become healthy within 10 minutes"
   docker compose logs --tail=100
   exit 1
 fi

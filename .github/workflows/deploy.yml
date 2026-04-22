@@ -66,16 +66,13 @@ jobs:
           TF_VAR_billing_account_id: ${{ secrets.GCP_BILLING_ACCOUNT_ID }}
           # Optional — if set, enables Slack notification channel in addition
           # to email. If unset, only email fires. See monitoring.tf for the
-          # conditional wiring. We intentionally do NOT set
-          # TF_VAR_slack_channel here: when the GitHub `vars.TF_VAR_slack_channel`
-          # is undefined, the expression evaluates to empty string, which
-          # Terraform would treat as an explicit value and use instead of
-          # its own `default = "#n8n-ops"` in variables.tf. Operators who
-          # want a non-default channel should set TF_VAR_slack_channel as a
-          # GitHub Actions variable; the deploy workflow picks it up
-          # automatically via TF_VAR_ env-var convention without us having
-          # to list it here.
+          # conditional wiring. The `||` fallback keeps Terraform's own
+          # `default = "#n8n-ops"` semantics intact: when the GitHub
+          # variable is undefined, `vars.TF_VAR_slack_channel` evaluates to
+          # an empty string (falsy in GH Actions expressions), and the
+          # literal default kicks in instead of being overwritten by "".
           TF_VAR_slack_auth_token: ${{ secrets.SLACK_BOT_TOKEN }}
+          TF_VAR_slack_channel: ${{ vars.TF_VAR_slack_channel || '#n8n-ops' }}
 
       - name: Terraform Apply
         run: terraform apply -auto-approve tfplan
@@ -90,6 +87,9 @@ jobs:
           TF_VAR_n8n_public_host: ${{ vars.TF_VAR_n8n_public_host }}
           TF_VAR_oncall_email: ${{ vars.TF_VAR_oncall_email }}
           TF_VAR_billing_account_id: ${{ secrets.GCP_BILLING_ACCOUNT_ID }}
-          # Same rationale as the Plan step above: omit TF_VAR_slack_channel
-          # so Terraform's default applies when the GitHub variable is unset.
+          # Same `||` fallback as the Plan step above: GitHub Actions
+          # vars.* are only accessible in ${{ ... }} expressions, not
+          # auto-exported as env vars, so we must list the var explicitly
+          # with a fallback that preserves Terraform's `default = "#n8n-ops"`.
           TF_VAR_slack_auth_token: ${{ secrets.SLACK_BOT_TOKEN }}
+          TF_VAR_slack_channel: ${{ vars.TF_VAR_slack_channel || '#n8n-ops' }}

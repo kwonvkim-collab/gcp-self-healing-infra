@@ -209,7 +209,11 @@ resource "google_logging_metric" "n8n_startup_critical" {
   filter = join(" AND ", [
     "resource.type=\"gce_instance\"",
     "logName=\"projects/${var.project_id}/logs/startup_log\"",
-    "textPayload:\"CRITICAL: n8n failed to start\"",
+    # Stable substring; the per-component detail ("n8n" / "cloudflared"
+    # / "both") is appended after an em-dash in startup.sh so this
+    # filter keeps matching regardless of which component triggered
+    # the critical path.
+    "textPayload:\"CRITICAL: startup failed\"",
   ])
   metric_descriptor {
     metric_kind  = "DELTA"
@@ -251,7 +255,7 @@ resource "google_monitoring_alert_policy" "startup_critical" {
     auto_close = "3600s"
   }
   documentation {
-    content   = "scripts/startup.sh hit the terminal 'CRITICAL: n8n failed to start' branch. ${local.runbook_url_md} §2 covers boot-loop triage."
+    content   = "scripts/startup.sh hit the terminal 'CRITICAL: startup failed' branch (either n8n, cloudflared, or both did not become healthy in 10 min; the log message names the component). ${local.runbook_url_md} §2 covers boot-loop triage."
     mime_type = "text/markdown"
   }
 }
