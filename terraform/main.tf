@@ -28,6 +28,17 @@ resource "google_project_service" "required" {
     "monitoring.googleapis.com",
     # Phase 4: google_billing_budget goes through the billingbudgets API.
     "billingbudgets.googleapis.com",
+    # Phase 4 / PR B: google_sql_database_instance needs the Cloud SQL
+    # Admin API. Enabling it unconditionally (not gated on
+    # var.cloud_sql_managed) is cheap — the API has no per-enable cost —
+    # and avoids a two-step apply when flipping the toggle.
+    "sqladmin.googleapis.com",
+    # Phase 4 / PR B: Cloud SQL private IP requires a VPC peering with
+    # the Service Networking API. Enabling the API here still leaves
+    # peering as an out-of-band step (same as var.db_host assumption),
+    # but makes the private IP creation path work once peering is in
+    # place.
+    "servicenetworking.googleapis.com",
   ])
 
   service = each.key
