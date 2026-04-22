@@ -367,9 +367,11 @@ resource "google_compute_region_instance_group_manager" "mig" {
 # either a misconfiguration (e.g. VM size increased by accident, surprise
 # egress) or a conscious scaling decision. Alerting at 50/90/100% of a
 # hard monthly cap (var.monthly_budget_usd, default $5) gives us three
-# chances to notice before a real bill. The alert fires via the same
-# google_monitoring_notification_channel the SLO burn-rate alerts use
-# (see monitoring.tf) — one on-call inbox, one pager.
+# chances to notice before a real bill. The alert fans out to
+# local.all_notification_channels (see monitoring.tf) — email always,
+# Slack when var.slack_auth_token is set — so billing notifications
+# reach the same destinations as every other SLO / startup / log-
+# ingestion alert and stay consistent with Runbook §6.1.
 resource "google_billing_budget" "monthly_cap" {
   # Opt-in: leaving var.billing_account_id empty disables the budget
   # entirely. The rest of the stack is project-scoped and does not need
@@ -410,14 +412,16 @@ resource "google_billing_budget" "monthly_cap" {
     spend_basis       = "CURRENT_SPEND"
   }
 
-  # Piggyback on the email channel provisioned in monitoring.tf so the
-  # on-call rotation receives budget alerts alongside SLO alerts. Opting
-  # into pubsubTopic or additional channels is left for a later phase.
+  # Reuse the same notification channel set as every SLO / startup /
+  # log-ingestion alert uses (see monitoring.tf). local.all_notification_channels
+  # resolves to email-only when Slack is opted out and email + Slack
+  # when var.slack_auth_token is provided, keeping the delivery path
+  # consistent with Runbook §6.1 ("monthly_cap budget 90% → P2 → Slack
+  # #n8n-ops"). Opting into pubsubTopic or additional channels is left
+  # for a later phase.
   all_updates_rule {
-    monitoring_notification_channels = [
-      google_monitoring_notification_channel.email.id,
-    ]
-    disable_default_iam_recipients = false
+    monitoring_notification_channels = local.all_notification_channels
+    disable_default_iam_recipients   = false
   }
 
   depends_on = [google_project_service.required]
