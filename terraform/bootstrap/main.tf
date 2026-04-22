@@ -81,6 +81,12 @@ variable "versioning_noncurrent_retention_days" {
   default     = 90
 }
 
+variable "versioning_noncurrent_version_cap" {
+  description = "Maximum number of non-current versions to retain per object. Caps storage even if a write-heavy burst produces 30+ revisions inside the retention window. Must match the claim in README §Terraform state rollback (currently 30)."
+  type        = number
+  default     = 30
+}
+
 resource "google_storage_bucket" "tfstate" {
   # checkov:skip=CKV_GCP_62:Access logs for the state bucket would themselves need a storage bucket, recursing the bootstrap problem. Cloud Audit Logs for GCS admin activity (enabled by default, not per-bucket) already answers the audit question that matters: who created/deleted/overwrote state objects. Per-object read logging would be pure noise, since every `terraform plan` reads state.
   name          = var.bucket_name
@@ -98,7 +104,27 @@ resource "google_storage_bucket" "tfstate" {
   }
 
   # Age out non-current versions so the bucket doesn't grow unbounded.
-  # Live objects are untouched — only the superseded revisions.
+  # Two rules, OR'd by GCS (a version matching EITHER is deleted):
+  #
+  #   1. Cap the count at `versioning_noncurrent_version_cap` (default
+  #      30). Prevents a pathological write-heavy burst from ballooning
+  #      storage even if no version is older than the age limit.
+  #   2. Cap the age at `versioning_noncurrent_retention_days` (default
+  #      90). `num_newer_versions = 1` is the "pin to non-current only"
+  #      idiom — the live version always counts as newer, so the
+  #      condition skips the current object and acts only on superseded
+  #      revisions.
+  #
+  # Live (current) objects are never affected by either rule.
+  lifecycle_rule {
+    action {
+      type = "Delete"
+    }
+    condition {
+      num_newer_versions = var.versioning_noncurrent_version_cap
+    }
+  }
+
   lifecycle_rule {
     action {
       type = "Delete"
