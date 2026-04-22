@@ -124,8 +124,11 @@ jobs:
           echo "resolved: n8n=$n8n"
           echo "resolved: cloudflared=$cf"
 
+      # Pinned to v0.36.0 (2026-04-22 release). aquasecurity migrated to
+      # v-prefixed tags after a prior supply-chain incident; using the
+      # v-prefixed tag ensures we're on the post-migration lineage.
       - name: Trivy — n8n image
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ steps.images.outputs.n8n }}
           severity: HIGH,CRITICAL
@@ -134,7 +137,7 @@ jobs:
           vuln-type: os,library
 
       - name: Trivy — cloudflared image
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ steps.images.outputs.cloudflared }}
           severity: HIGH,CRITICAL
