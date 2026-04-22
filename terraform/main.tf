@@ -84,6 +84,46 @@ resource "google_project_iam_member" "vm_sa_metric_writer" {
 }
 
 # ==========================================
+# 1.1 WIF ATTRIBUTE CONDITION ENFORCEMENT (Phase 4 follow-up)
+# ==========================================
+# Phase 3 emitted the canonical attribute_condition as a Terraform output
+# so operators could copy-paste it into `gcloud iam workload-identity-pools
+# providers update-oidc`. That is documentation only — it does not detect
+# drift if the condition is edited out-of-band, or if the pool was
+# bootstrapped without it. This data source + precondition closes that gap:
+# when var.wif_pool_id / var.wif_provider_id are both set, Terraform reads
+# the live attribute_condition and refuses to plan if it drifts from the
+# expected string. When either var is empty, the data source is skipped
+# and the output-only documentation is the sole safeguard (unchanged
+# behaviour for repos that haven't opted in).
+locals {
+  wif_enforcement_enabled = var.wif_pool_id != "" && var.wif_provider_id != ""
+  wif_expected_condition  = "assertion.repository == \"${var.wif_allowed_repository}\" && assertion.ref == \"${var.wif_allowed_ref}\""
+}
+
+data "google_iam_workload_identity_pool_provider" "github" {
+  count                              = local.wif_enforcement_enabled ? 1 : 0
+  project                            = var.project_id
+  workload_identity_pool_id          = var.wif_pool_id
+  workload_identity_pool_provider_id = var.wif_provider_id
+
+  lifecycle {
+    postcondition {
+      condition     = self.attribute_condition == local.wif_expected_condition
+      error_message = <<-EOM
+        WIF attribute_condition drift detected on provider '${var.wif_provider_id}' in pool '${var.wif_pool_id}'.
+        expected: ${local.wif_expected_condition}
+        actual:   $${self.attribute_condition}
+        Fix with: gcloud iam workload-identity-pools providers update-oidc ${var.wif_provider_id} \
+          --location=global --workload-identity-pool=${var.wif_pool_id} --project=${var.project_id} \
+          --attribute-condition='${local.wif_expected_condition}'
+        Or unset var.wif_pool_id / var.wif_provider_id to disable enforcement.
+      EOM
+    }
+  }
+}
+
+# ==========================================
 # 1. SECRETS MANAGEMENT
 # ==========================================
 
@@ -339,9 +379,15 @@ resource "google_billing_budget" "monthly_cap" {
   }
 
   amount {
+    # Billing budget amount is a google.type.Money: integer dollars in
+    # `units` and the fractional part in `nanos` (billionths of a dollar).
+    # Splitting var.monthly_budget_usd (a `number`) with floor + fraction
+    # preserves decimals; a previous revision used `tostring(var.x)` which
+    # silently dropped anything after the decimal point (e.g. $5.50 → $5).
     specified_amount {
       currency_code = "USD"
-      units         = tostring(var.monthly_budget_usd)
+      units         = tostring(floor(var.monthly_budget_usd))
+      nanos         = floor((var.monthly_budget_usd - floor(var.monthly_budget_usd)) * 1000000000)
     }
   }
 
