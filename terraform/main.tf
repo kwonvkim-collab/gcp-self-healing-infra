@@ -305,6 +305,19 @@ resource "google_compute_instance_template" "tpl" {
 
   lifecycle {
     create_before_destroy = true
+
+    # PR B guardrail: fail plan if the VM template would be rendered
+    # with an empty DB host. Either var.cloud_sql_managed must be true
+    # (and the managed instance will produce a private_ip_address) or
+    # var.db_host must be non-empty (out-of-band contract). An empty
+    # local.effective_db_host silently renders DB_POSTGRESDB_HOST=""
+    # into docker-compose.yml, producing an opaque n8n connect error
+    # after the VM boots — much harder to diagnose than a failing
+    # plan.
+    precondition {
+      condition     = local.effective_db_host != ""
+      error_message = "Either set var.cloud_sql_managed = true (and import the existing instance per terraform/cloud_sql.tf) or provide var.db_host for the out-of-band Cloud SQL instance."
+    }
   }
 }
 

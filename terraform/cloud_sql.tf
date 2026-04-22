@@ -85,16 +85,16 @@ locals {
   ) : var.db_host
 }
 
-# Guardrail: if neither a managed instance nor var.db_host is set, fail
-# at plan time with a clear message instead of rendering an empty host
-# into the VM startup script. Uses a check block so the diagnostic
-# surfaces during `terraform plan`.
-check "db_host_configured" {
-  assert {
-    condition     = local.cloud_sql_enabled || var.db_host != ""
-    error_message = "Either set var.cloud_sql_managed = true (and import the existing instance per terraform/cloud_sql.tf) or provide var.db_host for the out-of-band Cloud SQL instance."
-  }
-}
+# Guardrail note: the "neither managed nor var.db_host set" case is
+# caught at plan time by a lifecycle.precondition on
+# google_compute_instance_template.vm_tpl (see main.tf), not by a
+# top-level `check` block. Two reasons:
+#   * `check` blocks require Terraform 1.5+ *and* aws/tfsec currently
+#     refuses to parse them ("Unsupported block type"), which blocked
+#     CI on PR #8 until this was restructured.
+#   * lifecycle.precondition is supported by every static analyzer
+#     the stack uses (terraform validate, tflint, tfsec, checkov) and
+#     the operator sees the error at the same plan step.
 
 resource "google_sql_database_instance" "main" {
   count = local.cloud_sql_enabled ? 1 : 0
