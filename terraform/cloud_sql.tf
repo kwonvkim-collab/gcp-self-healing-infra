@@ -53,7 +53,7 @@
 #        terraform import 'google_sql_database.n8n[0]' \
 #          "projects/${PROJECT}/instances/${INSTANCE_NAME}/databases/postgres"
 #        terraform import 'google_sql_user.n8n[0]' \
-#          "${INSTANCE_NAME}/${DB_USER}"
+#          "${PROJECT}/${INSTANCE_NAME}/${DB_USER}"
 #
 #   3. Run `terraform plan`. Expected diff: `deletion_protection`
 #      flips on, `backup_configuration.point_in_time_recovery_enabled`

@@ -382,7 +382,7 @@ terraform import "google_sql_database_instance.main[0]" \
 terraform import "google_sql_database.n8n[0]" \
     "projects/${PROJECT_ID}/instances/${INSTANCE_NAME}/databases/postgres"
 terraform import "google_sql_user.n8n[0]" \
-    "${INSTANCE_NAME}/${DB_USER}"
+    "${PROJECT_ID}/${INSTANCE_NAME}/${DB_USER}"
 
 # 3. DRY-RUN the plan. Expect:
 #      - `deletion_protection` to flip on (was false on an
