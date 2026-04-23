@@ -13,8 +13,10 @@ APT_INSTALL_OPTS=(-y \
   -o Dpkg::Options::=--force-confdef)
 
 echo "=== Swap ==="
+# 4 GB swap: e2-micro has only 1 GB RAM and must pull+extract container images
+# (~500 MB for n8n); without enough swap the kernel OOM-kills dockerd mid-pull.
 if [ ! -f /swapfile ]; then
-  fallocate -l 2G /swapfile
+  fallocate -l 4G /swapfile
   chmod 600 /swapfile
   mkswap /swapfile
   swapon /swapfile
@@ -55,21 +57,27 @@ EOF
 mkdir -p /etc/systemd/system/docker.service.d
 mkdir -p /etc/systemd/system/containerd.service.d
 
+# On a 1-vCPU e2-micro there is no other tenant worth protecting: capping
+# docker+containerd with CPUQuota=85% just throttles image extraction and
+# makes the bootstrap slower without freeing anything useful. Keep
+# CPUAccounting for metrics and the start-timeout only.
 cat <<EOF > /etc/systemd/system/docker.service.d/throttle.conf
 [Service]
 CPUAccounting=true
-CPUQuota=85%
 TimeoutStartSec=180
 EOF
 
 cat <<EOF > /etc/systemd/system/containerd.service.d/throttle.conf
 [Service]
 CPUAccounting=true
-CPUQuota=85%
 TimeoutStartSec=180
 EOF
 
-sysctl -w vm.swappiness=10
+# Prefer swapping over OOM-killing dockerd during image extraction. The old
+# value of 10 biased the kernel toward killing processes under memory pressure,
+# which was the observed failure mode on e2-micro (docker pull stalls and the
+# VM becomes unresponsive).
+sysctl -w vm.swappiness=60
 systemctl daemon-reload
 systemctl restart containerd
 sleep 5

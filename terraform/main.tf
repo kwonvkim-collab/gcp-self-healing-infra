@@ -133,8 +133,13 @@ resource "google_compute_instance_template" "tpl" {
   disk {
     source_image = "ubuntu-os-cloud/ubuntu-2204-lts"
     disk_size_gb = 30
-    auto_delete  = true
-    boot         = true
+    # pd-balanced has ~3x the random-IO throughput of pd-standard for
+    # ~the same Free Tier cost, which materially speeds up docker image
+    # extraction on the 1-vCPU e2-micro (avoids the observed stall during
+    # n8n layer extraction).
+    disk_type   = "pd-balanced"
+    auto_delete = true
+    boot        = true
   }
 
   network_interface {
