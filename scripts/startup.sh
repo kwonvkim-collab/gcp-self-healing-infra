@@ -2,6 +2,16 @@
 set -e
 exec > >(tee /var/log/startup.log|logger -t startup) 2>&1
 
+# Non-interactive apt: never prompt on conffile conflicts (dpkg would otherwise
+# EOF on stdin inside the startup-script runner and abort the whole bootstrap).
+export DEBIAN_FRONTEND=noninteractive
+# shellcheck disable=SC2034
+# Used below on apt-get install; name is stable so terraform templatefile()
+# escaping (double-$) doesn't break the rendered bash.
+APT_INSTALL_OPTS=(-y \
+  -o Dpkg::Options::=--force-confold \
+  -o Dpkg::Options::=--force-confdef)
+
 echo "=== Swap ==="
 if [ ! -f /swapfile ]; then
   fallocate -l 2G /swapfile
@@ -21,7 +31,7 @@ retry() {
 
 echo "=== Install Docker ==="
 retry apt-get update
-retry apt-get install -y ca-certificates curl gnupg docker.io
+retry apt-get install "$${APT_INSTALL_OPTS[@]}" ca-certificates curl gnupg docker.io
 
 mkdir -p /usr/local/lib/docker/cli-plugins
 curl -SL https://github.com/docker/compose/releases/download/v2.24.6/docker-compose-linux-x86_64 \
