@@ -109,7 +109,7 @@ cat <<EOF > docker-compose.yml
 version: '3.8'
 services:
   n8n:
-    image: docker.n8n.io/n8nio/n8n:2.16.1
+    image: ${n8n_image}
     restart: unless-stopped
     ports:
       - "5678:5678"

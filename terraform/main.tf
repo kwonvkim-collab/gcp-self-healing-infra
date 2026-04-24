@@ -159,6 +159,7 @@ resource "google_compute_instance_template" "tpl" {
       CF_TUNNEL_SECRET_NAME = google_secret_manager_secret.cf_token.secret_id
       db_name               = "postgres"
       db_port               = "5432"
+      n8n_image             = var.n8n_image
     })
   }
 
