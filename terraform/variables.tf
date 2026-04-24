@@ -3,9 +3,10 @@ variable "region" { default = "us-central1" }
 variable "zone" { default = "us-central1-a" }
 
 variable "n8n_image" {
-  description = "Pinned n8n container image. Bump this to upgrade n8n; release notes: https://github.com/n8n-io/n8n/releases"
+  description = "Pinned n8n container image (tag@digest). Managed by Renovate; release notes: https://github.com/n8n-io/n8n/releases"
   type        = string
-  default     = "docker.n8n.io/n8nio/n8n:2.17.6"
+  # renovate: datasource=docker depName=docker.n8n.io/n8nio/n8n
+  default = "docker.n8n.io/n8nio/n8n:2.17.6@sha256:52e1870b45f0a84e8adeb5f5d9c6ac37cfdeed2a711c22355e26ddd8ccdd161a"
 }
 
 variable "db_host" {}
