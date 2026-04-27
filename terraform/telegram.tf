@@ -39,6 +39,7 @@ resource "google_project_service" "cloudbuild" {
 
 # --- Pub/Sub topic for Cloud Monitoring alerts ---
 
+# checkov:skip=CKV_GCP_83: Alert payloads contain no sensitive data; CSEK adds key-management overhead with no security benefit
 resource "google_pubsub_topic" "alerts" {
   count   = local.telegram_enabled ? 1 : 0
   name    = "n8n-monitoring-alerts"
@@ -109,6 +110,7 @@ resource "google_storage_bucket_object" "telegram_fn" {
 
 # --- Cloud Function Gen1 (lighter than Gen2, no Eventarc/Cloud Run) ---
 
+# checkov:skip=CKV_GCP_124: Function is Pub/Sub-triggered (event_trigger), not HTTP-invoked; ingress_settings is irrelevant
 resource "google_cloudfunctions_function" "telegram_alert" {
   count       = local.telegram_enabled ? 1 : 0
   name        = "n8n-telegram-alert"
