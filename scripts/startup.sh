@@ -291,7 +291,7 @@ volumes:
   postgres_data:
 EOF
 
-docker compose config || { echo "❌ Invalid docker-compose.yml"; exit 1; }
+docker compose config >/dev/null || { echo "❌ Invalid docker-compose.yml"; exit 1; }
 
 echo "=== Cleaning package cache before image pull ==="
 apt-get clean
