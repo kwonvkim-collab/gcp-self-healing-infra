@@ -585,5 +585,41 @@ chmod +x /usr/local/bin/backup.sh
 echo "*/10 * * * * root BACKUP_BUCKET_NAME=${BACKUP_BUCKET_NAME} flock -n /tmp/n8n-backup.lock /usr/local/bin/backup.sh > /var/log/n8n-backup.log 2>&1" > /etc/cron.d/n8n-backup
 systemctl restart cron
 
+echo "=== Starting Health Proxy ==="
+cat <<'HEALTH_EOF' > /opt/health_server.py
+import http.server
+import socketserver
+import subprocess
+
+class Handler(http.server.SimpleHTTPRequestHandler):
+    def do_GET(self):
+        try:
+            result = subprocess.run(
+                ["curl", "-sf", "http://127.0.0.1:5678/healthz"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+            if result.returncode == 0:
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"OK")
+            else:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(b"FAIL")
+        except Exception:
+            self.send_response(500)
+            self.end_headers()
+            self.wfile.write(b"ERROR")
+
+    def log_message(self, format, *args):
+        pass
+
+with socketserver.TCPServer(("", 8080), Handler) as httpd:
+    httpd.serve_forever()
+HEALTH_EOF
+
+nohup python3 /opt/health_server.py >/var/log/health.log 2>&1 &
+
 echo "=== ALL DONE ==="
 exit 0

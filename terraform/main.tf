@@ -107,6 +107,20 @@ resource "google_secret_manager_secret_iam_member" "cf_token_access" {
 # 2. COMPUTE RESOURCES
 # ==========================================
 
+resource "google_compute_health_check" "hc" {
+  name = "n8n-health-check"
+
+  http_health_check {
+    port         = 8080
+    request_path = "/"
+  }
+
+  check_interval_sec  = 10
+  timeout_sec         = 5
+  healthy_threshold   = 2
+  unhealthy_threshold = 5
+}
+
 resource "google_compute_instance_template" "tpl" {
   depends_on = [
     google_secret_manager_secret.db_password,
@@ -160,6 +174,11 @@ resource "google_compute_instance_group_manager" "mig" {
 
   version {
     instance_template = google_compute_instance_template.tpl.id
+  }
+
+  auto_healing_policies {
+    health_check      = google_compute_health_check.hc.id
+    initial_delay_sec = 2400
   }
 
   update_policy {
