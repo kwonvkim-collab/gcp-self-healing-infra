@@ -37,6 +37,14 @@ resource "google_project_service" "cloudbuild" {
   disable_on_destroy = false
 }
 
+resource "google_project_service" "pubsub" {
+  count   = local.telegram_enabled ? 1 : 0
+  project = var.project_id
+  service = "pubsub.googleapis.com"
+
+  disable_on_destroy = false
+}
+
 # --- Pub/Sub topic for Cloud Monitoring alerts ---
 
 # checkov:skip=CKV_GCP_83: Alert payloads contain no sensitive data; CSEK adds key-management overhead with no security benefit
@@ -44,6 +52,8 @@ resource "google_pubsub_topic" "alerts" {
   count   = local.telegram_enabled ? 1 : 0
   name    = "n8n-monitoring-alerts"
   project = var.project_id
+
+  depends_on = [google_project_service.pubsub]
 }
 
 # Cloud Monitoring notification channel (type = pubsub). This is added
@@ -145,7 +155,9 @@ resource "google_cloudfunctions_function" "telegram_alert" {
   depends_on = [
     google_project_service.cloudfunctions,
     google_project_service.cloudbuild,
+    google_project_service.pubsub,
     google_secret_manager_secret_iam_member.telegram_token_accessor,
+    google_secret_manager_secret_version.telegram_bot_token_v,
   ]
 }
 
