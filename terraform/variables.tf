@@ -257,3 +257,29 @@ variable "backup_bucket_name" {
     error_message = "backup_bucket_name must not be empty"
   }
 }
+
+# --------------------------------------------------------
+# Telegram alerts (Phase 5)
+# --------------------------------------------------------
+# Opt-in: all three vars default to "". When telegram_bot_token is empty,
+# the entire Telegram delivery chain (Pub/Sub topic, Cloud Function,
+# Secret Manager secret) is not provisioned.
+
+variable "telegram_bot_token" {
+  description = "Telegram bot token from @BotFather (format: 123456:ABC-DEF...). Stored in Secret Manager, never in Terraform state. Leave empty to disable Telegram alerts."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "telegram_chat_id" {
+  description = "Telegram group/supergroup chat ID (negative number, e.g. -1001234567890). Get via https://api.telegram.org/bot<TOKEN>/getUpdates after sending a message in the group."
+  type        = string
+  default     = ""
+}
+
+variable "telegram_thread_id" {
+  description = "Telegram forum topic (thread) ID. When the group has Topics enabled, alerts land in this specific topic instead of General. Get from the URL in Telegram Desktop: t.me/c/XXXX/<THREAD_ID>. Leave empty to post to General."
+  type        = string
+  default     = ""
+}

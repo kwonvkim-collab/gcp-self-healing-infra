@@ -62,6 +62,7 @@ locals {
   all_notification_channels = concat(
     [google_monitoring_notification_channel.email.id],
     google_monitoring_notification_channel.slack[*].id,
+    google_monitoring_notification_channel.telegram[*].id,
   )
 }
 
@@ -307,6 +308,119 @@ resource "google_monitoring_alert_policy" "log_ingestion_absent" {
   }
   documentation {
     content   = "Ops Agent is likely broken on the n8n VM — no startup_log entries have been ingested for 24h. Without log ingestion the startup_critical alert above cannot fire, which is a silent observability gap. ${local.runbook_url_md} §2 covers Ops Agent diagnosis (journalctl -u google-cloud-ops-agent)."
+    mime_type = "text/markdown"
+  }
+}
+
+# ------------------------------------------------------------
+# Backup health alerts (Phase 5)
+# ------------------------------------------------------------
+# backup.sh runs every 10 min via cron. It writes to /var/log/n8n-backup.log
+# which Ops Agent ships to Cloud Logging as logName "backup_log". Two
+# complementary alerts:
+#   * backup_failed  — fires when BACKUP FAILED or EMPTY BACKUP appears
+#   * backup_absent  — fires when no BACKUP_OK line for 30 min (cron dead)
+
+resource "google_logging_metric" "backup_failed" {
+  name    = "n8n/backup_failed"
+  project = var.project_id
+  filter = join(" AND ", [
+    "resource.type=\"gce_instance\"",
+    "logName=\"projects/${var.project_id}/logs/backup_log\"",
+    "(textPayload:\"BACKUP FAILED\" OR textPayload:\"EMPTY BACKUP\" OR textPayload:\"CHECKSUM UPLOAD FAILED\")",
+  ])
+  metric_descriptor {
+    metric_kind  = "DELTA"
+    value_type   = "INT64"
+    unit         = "1"
+    display_name = "n8n backup failure events"
+  }
+}
+
+resource "google_monitoring_alert_policy" "backup_failed" {
+  display_name = "n8n backup failed"
+  severity     = "WARNING"
+  combiner     = "OR"
+  user_labels = {
+    runbook = "gcp-self-healing-infra-runbook-md"
+    scope   = "backup"
+  }
+
+  conditions {
+    display_name = "backup failure > 0 in 5 min"
+    condition_threshold {
+      filter          = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.backup_failed.name}\" resource.type=\"gce_instance\""
+      threshold_value = 0
+      comparison      = "COMPARISON_GT"
+      duration        = "0s"
+      trigger {
+        count = 1
+      }
+      aggregations {
+        alignment_period     = "300s"
+        per_series_aligner   = "ALIGN_SUM"
+        cross_series_reducer = "REDUCE_SUM"
+      }
+    }
+  }
+
+  notification_channels = local.all_notification_channels
+  alert_strategy {
+    auto_close = "3600s"
+  }
+  documentation {
+    content   = "backup.sh failed: either pg_dump produced an empty file, gsutil upload failed, or checksum upload failed. Check /var/log/n8n-backup.log on the VM. ${local.runbook_url_md} §Backup & DR."
+    mime_type = "text/markdown"
+  }
+}
+
+resource "google_logging_metric" "backup_ok" {
+  name    = "n8n/backup_ok"
+  project = var.project_id
+  filter = join(" AND ", [
+    "resource.type=\"gce_instance\"",
+    "logName=\"projects/${var.project_id}/logs/backup_log\"",
+    "textPayload:\"BACKUP_OK\"",
+  ])
+  metric_descriptor {
+    metric_kind  = "DELTA"
+    value_type   = "INT64"
+    unit         = "1"
+    display_name = "n8n backup success events"
+  }
+}
+
+resource "google_monitoring_alert_policy" "backup_absent" {
+  display_name = "n8n backup absent — cron or Ops Agent dead?"
+  severity     = "WARNING"
+  combiner     = "OR"
+  user_labels = {
+    runbook = "gcp-self-healing-infra-runbook-md"
+    scope   = "backup"
+  }
+
+  conditions {
+    display_name = "no BACKUP_OK for 30 min"
+    condition_absent {
+      filter   = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.backup_ok.name}\" resource.type=\"gce_instance\""
+      duration = "1800s"
+      trigger {
+        count = 1
+      }
+      aggregations {
+        alignment_period     = "600s"
+        per_series_aligner   = "ALIGN_SUM"
+        cross_series_reducer = "REDUCE_SUM"
+      }
+    }
+  }
+
+  notification_channels = local.all_notification_channels
+  alert_strategy {
+    auto_close = "3600s"
+  }
+  documentation {
+    content   = "No successful backup (BACKUP_OK) logged for 30 min. Cron runs every 10 min, so 3 consecutive failures or a dead cron/Ops Agent. Check: (1) `cat /var/log/n8n-backup.log` on the VM, (2) `systemctl status cron`, (3) `journalctl -u google-cloud-ops-agent`. ${local.runbook_url_md} §Backup & DR."
     mime_type = "text/markdown"
   }
 }

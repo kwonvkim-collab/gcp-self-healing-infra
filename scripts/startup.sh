@@ -185,11 +185,16 @@ logging:
       type: files
       include_paths:
         - /var/log/startup.log
+    backup_log:
+      type: files
+      include_paths:
+        - /var/log/n8n-backup.log
   service:
     pipelines:
       default_pipeline:
         receivers:
           - startup_log
+          - backup_log
 metrics:
   service:
     pipelines: {}
