@@ -236,6 +236,16 @@ resource "google_storage_bucket" "backup" {
   name                        = var.backup_bucket_name
   location                    = "US-CENTRAL1"
   uniform_bucket_level_access = true
+  public_access_prevention    = "enforced"
+
+  versioning {
+    enabled = true
+  }
+
+  logging {
+    log_bucket        = google_storage_bucket.logs.name
+    log_object_prefix = "backup-access"
+  }
 
   lifecycle_rule {
     condition {
@@ -255,6 +265,13 @@ resource "google_storage_bucket_iam_member" "backup_writer" {
   bucket = google_storage_bucket.backup.name
   role   = "roles/storage.objectAdmin"
   member = "serviceAccount:${google_service_account.vm_sa.email}"
+}
+
+resource "google_storage_bucket" "logs" {
+  name                        = "${var.backup_bucket_name}-logs"
+  location                    = "US-CENTRAL1"
+  uniform_bucket_level_access = true
+  public_access_prevention    = "enforced"
 }
 
 
