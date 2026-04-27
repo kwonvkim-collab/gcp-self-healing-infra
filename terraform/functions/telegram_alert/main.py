@@ -42,14 +42,16 @@ def _send_telegram(text: str) -> None:
 
 
 def _format_alert(incident: dict) -> str:
+    from html import escape
+
     severity = incident.get("severity", "UNKNOWN")
     emoji = SEVERITY_EMOJI.get(severity, "⚪")
     state = incident.get("state", "unknown")
-    policy = incident.get("policy_name", "—")
-    summary = incident.get("summary", "")
+    policy = escape(incident.get("policy_name", "—"))
+    summary = escape(incident.get("summary", ""))
     url = incident.get("url", "")
-    resource = incident.get("resource_name", "")
-    condition = incident.get("condition_name", "")
+    resource = escape(incident.get("resource_name", ""))
+    condition = escape(incident.get("condition_name", ""))
 
     state_text = "🔥 OPEN" if state == "open" else "✅ CLOSED"
 
@@ -65,7 +67,7 @@ def _format_alert(incident: dict) -> str:
     if summary:
         lines.append(f"\n{summary}")
     if url:
-        lines.append(f'\n<a href="{url}">Open in Cloud Console</a>')
+        lines.append(f'\n<a href="{escape(url, quote=True)}">Open in Cloud Console</a>')
 
     return "\n".join(lines)
 
