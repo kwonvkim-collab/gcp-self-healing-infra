@@ -265,9 +265,9 @@ services:
       N8N_RUNNERS_ENABLED: "true"
       N8N_RUNNERS_MODE: internal
       
-      N8N_HOST: n8n-gcp.pp.ua
+      N8N_HOST: ${n8n_public_host}
       N8N_PROTOCOL: https
-      WEBHOOK_URL: https://n8n-gcp.pp.ua/
+      WEBHOOK_URL: https://${n8n_public_host}/
       # Disable the telemetry that throws 'track' errors
       N8N_DIAGNOSTICS_ENABLED: "false"
       N8N_PORT: 5678

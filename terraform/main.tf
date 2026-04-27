@@ -349,6 +349,7 @@ resource "google_compute_instance_template" "tpl" {
       n8n_image             = var.n8n_image
       cloudflared_image     = var.cloudflared_image
       BACKUP_BUCKET_NAME    = var.backup_bucket_name
+      n8n_public_host       = var.n8n_public_host
     })
   }
 
