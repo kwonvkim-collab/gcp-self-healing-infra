@@ -111,8 +111,8 @@ resource "google_compute_health_check" "hc" {
   name = "n8n-health-check"
 
   http_health_check {
-    port         = 5678
-    request_path = "/healthz"
+    port         = 8080
+    request_path = "/"
   }
 
   check_interval_sec  = 10
@@ -152,13 +152,12 @@ resource "google_compute_instance_template" "tpl" {
 
   metadata = {
     startup-script = templatefile("${path.module}/../scripts/startup.sh", {
-      db_host               = var.db_host
-      db_user               = var.db_user
       DB_SECRET_NAME        = google_secret_manager_secret.db_password.secret_id
       N8N_KEY_SECRET_NAME   = google_secret_manager_secret.n8n_key.secret_id
       CF_TUNNEL_SECRET_NAME = google_secret_manager_secret.cf_token.secret_id
-      db_name               = "postgres"
-      db_port               = "5432"
+      n8n_image             = var.n8n_image
+      cloudflared_image     = var.cloudflared_image
+      BACKUP_BUCKET_NAME    = var.backup_bucket_name
     })
   }
 
@@ -179,7 +178,7 @@ resource "google_compute_instance_group_manager" "mig" {
 
   auto_healing_policies {
     health_check      = google_compute_health_check.hc.id
-    initial_delay_sec = 2400 # chamge because sometimes update takes time
+    initial_delay_sec = 2400
   }
 
   update_policy {
