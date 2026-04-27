@@ -21,7 +21,7 @@ if [ ! -f /swapfile ]; then
   chmod 600 /swapfile
   mkswap /swapfile
   if ! swapon --show | grep -q /swapfile; then
-    swapon /swapfile
+  swapon /swapfile
   fi
   echo '/swapfile none swap sw 0 0' >> /etc/fstab
 fi
@@ -36,13 +36,17 @@ retry() {
 
 echo "=== Install Docker ==="
 retry apt-get update
-retry apt-get install "$${APT_INSTALL_OPTS[@]}" ca-certificates curl gnupg docker.io cron postgresql-client
-retry apt-get install "$${APT_INSTALL_OPTS[@]}" apt-transport-https
+retry apt-get install "$${APT_INSTALL_OPTS[@]}" ca-certificates curl gnupg docker.io cron postgresql-client 
+retry apt-get install "$${APT_INSTALL_OPTS[@]}" apt-transport-https 
 echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" > /etc/apt/sources.list.d/google-cloud-sdk.list
 curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | \
-  gpg --dearmor --yes -o /usr/share/keyrings/cloud.google.gpg
+gpg --dearmor --yes -o /usr/share/keyrings/cloud.google.gpg
 retry apt-get update
 retry apt-get install "$${APT_INSTALL_OPTS[@]}" google-cloud-cli
+
+
+
+
 
 mkdir -p /usr/local/lib/docker/cli-plugins
 curl -SL https://github.com/docker/compose/releases/download/v2.24.6/docker-compose-linux-x86_64 \
@@ -96,8 +100,10 @@ for i in {1..30}; do
   echo "⏳ Waiting for Docker ($i/30)..."
   sleep 2
 done
-
-docker info >/dev/null 2>&1 || { echo "❌ Docker not ready after 60s"; exit 1; }
+docker info >/dev/null 2>&1 || {
+  echo "❌ Docker not ready after 60s"
+  exit 1
+}
 
 echo "=== Checking GCP metadata (service account) ==="
 
@@ -154,6 +160,7 @@ CF_TOKEN=$(retry gcloud secrets versions access latest --secret="${CF_TUNNEL_SEC
 
 echo "✅ All secrets fetched successfully."
 
+# Создаем файл .env для гарантированной передачи секретов в Docker
 echo "=== Setup Environment ==="
 mkdir -p /opt/n8n
 cat <<EOF > /opt/n8n/.env
@@ -192,13 +199,16 @@ EOF
 # an application dependency, and must never boot-loop the VM on transient
 # apt or network errors. `set -e` is suppressed for this block only; any
 # failure is logged as a WARNING and the rest of the script continues so
-# the n8n container still starts.
+# the n8n container still starts and the GCP health check stays green.
 {
   retry curl -sSO https://dl.google.com/cloudagents/add-google-cloud-ops-agent-repo.sh &&
+    # Сначала добавляем репозиторий БЕЗ установки (убираем --also-install)
     retry bash add-google-cloud-ops-agent-repo.sh &&
+    # Устанавливаем принудительно, игнорируя вопросы о конфигах
     retry apt-get install -y -o Dpkg::Options::="--force-confold" google-cloud-ops-agent &&
     systemctl enable --now google-cloud-ops-agent
 } || echo "⚠️ WARNING: Ops Agent install failed..."
+
 
 echo "=== Pre-flight Variables Check ==="
 
@@ -216,26 +226,22 @@ services:
   postgres:
     image: postgres:15-alpine
     restart: unless-stopped
-    env_file:
-      - .env
     environment:
       POSTGRES_DB: n8n
       POSTGRES_USER: n8n
       POSTGRES_PASSWORD: $${DB_PASSWORD}
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U n8n"]
+      test: ["CMD-SHELL", "pg_isready -U n8n -d n8n"]
       interval: 5s
       timeout: 3s
       retries: 5
     volumes:
       - postgres_data:/var/lib/postgresql/data
-
   n8n:
-    container_name: n8n
     image: ${n8n_image}
     restart: unless-stopped
     ports:
-      - "127.0.0.1:5678:5678"
+        - "127.0.0.1:5678:5678"
     environment:
       DB_TYPE: postgresdb
       DB_POSTGRESDB_HOST: postgres
@@ -243,42 +249,55 @@ services:
       DB_POSTGRESDB_DATABASE: n8n
       DB_POSTGRESDB_USER: n8n
       DB_POSTGRESDB_PASSWORD: $${DB_PASSWORD}
+
       N8N_ENCRYPTION_KEY: $${N8N_KEY}
+
       N8N_EXECUTIONS_MODE: regular
+      
       N8N_CONCURRENCY_PRODUCTION_LIMIT: 1
       N8N_LOG_LEVEL: error
+
       EXECUTIONS_DATA_SAVE_ON_SUCCESS: none
       EXECUTIONS_DATA_SAVE_ON_ERROR: all
       EXECUTIONS_DATA_PRUNE: true
       EXECUTIONS_DATA_MAX_AGE_HISTORY: 24
+
       N8N_RUNNERS_ENABLED: "true"
       N8N_RUNNERS_MODE: internal
-      N8N_HOST: 0.0.0.0
+      
+      N8N_HOST: ${n8n_public_host}
+      N8N_PROTOCOL: https
+      WEBHOOK_URL: https://${n8n_public_host}/
+      # Disable the telemetry that throws 'track' errors
+      N8N_DIAGNOSTICS_ENABLED: "false"
       N8N_PORT: 5678
-      N8N_PROTOCOL: http
       N8N_LISTEN_ADDRESS: 0.0.0.0
+      DB_POSTGRESDB_CONNECTION_TIMEOUT: 60000
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
+      
     healthcheck:
+      # 10s matches GCP health check check_interval_sec in terraform/main.tf.
+      # GCP probes every 10s; if Docker also checks every 10s there is no
+      # stale-health window where GCP reads healthy while n8n is already dead.
+      # start_period 420s covers cold DB migrations on e2-micro.
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5678/healthz || exit 1"]
+
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 420s
-    env_file:
-      - .env
     depends_on:
       postgres:
         condition: service_healthy
-
+        
   cloudflared:
-    container_name: cloudflared
     image: ${cloudflared_image}
     restart: unless-stopped
-    command: tunnel --no-autoupdate --metrics 0.0.0.0:2000 run --token $${CF_TOKEN}
+    command: tunnel --no-autoupdate --protocol http2 --metrics 0.0.0.0:2000 run --token $${CF_TOKEN}
     ports:
       - "127.0.0.1:2000:2000"
     env_file:
@@ -286,9 +305,8 @@ services:
     depends_on:
       n8n:
         condition: service_healthy
-
 volumes:
-  postgres_data:
+    postgres_data:
 EOF
 
 docker compose config >/dev/null || { echo "❌ Invalid docker-compose.yml"; exit 1; }
@@ -297,6 +315,8 @@ echo "=== Cleaning package cache before image pull ==="
 apt-get clean
 rm -rf /var/lib/apt/lists/*
 
+
+
 echo "=== Pulling n8n image ==="
 retry timeout 1800 docker pull "${n8n_image}" || {
   echo "❌ Docker pull failed"
@@ -304,10 +324,14 @@ retry timeout 1800 docker pull "${n8n_image}" || {
   exit 1
 }
 
+
 echo "=== Pulling cloudflared image ==="
 retry timeout 600 docker pull "${cloudflared_image}"
 
+
+echo "=== Starting Containers ==="
 echo "=== Starting Postgres ONLY (Phase 1) ==="
+# Поднимаем ТОЛЬКО базу, чтобы n8n не успел к ней подключиться
 docker compose up -d postgres || {
   echo "❌ docker compose up postgres failed"
   docker compose logs postgres --tail=50
@@ -319,6 +343,7 @@ READY=false
 for i in {1..60}; do
   if docker compose ps postgres >/dev/null 2>&1 && \
      docker compose exec -T postgres pg_isready -U n8n >/dev/null 2>&1; then
+    
     if docker compose exec -T postgres psql -U n8n -d postgres -c "SELECT 1;" >/dev/null 2>&1; then
       echo "✅ Postgres fully ready"
       READY=true
@@ -335,20 +360,22 @@ if [ "$READY" != "true" ]; then
   exit 1
 fi
 
+
+
 echo "=== Restore latest backup ==="
 SKIP_RESTORE=false
 
 echo "=== Checking if DB already has data ==="
 DB_EXISTS=$(docker compose exec -T postgres psql -U n8n -d postgres -tAc \
-  "SELECT 1 FROM pg_database WHERE datname='n8n';" | xargs)
+"SELECT 1 FROM pg_database WHERE datname='n8n';" | xargs)
 
 if [ "$DB_EXISTS" = "1" ]; then
   TABLE_EXISTS=$(docker compose exec -T postgres psql -U n8n -d n8n -tAc \
-    "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name='workflow_entity');" 2>/dev/null | xargs)
+  "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name='workflow_entity');" 2>/dev/null | xargs)
 
   if [ "$TABLE_EXISTS" = "t" ]; then
     WORKFLOW_COUNT=$(docker compose exec -T postgres psql -U n8n -d n8n -tAc \
-      "SELECT COUNT(*) FROM workflow_entity;" | xargs)
+    "SELECT COUNT(*) FROM workflow_entity;" | xargs)
     echo "Existing workflows: $WORKFLOW_COUNT"
 
     if [ "$WORKFLOW_COUNT" -gt 0 ]; then
@@ -358,21 +385,21 @@ if [ "$DB_EXISTS" = "1" ]; then
   fi
 fi
 
+# Выполняем поиск бэкапа только если решили ресторить
 if [ "$SKIP_RESTORE" != "true" ]; then
   echo "=== Selecting valid backup ==="
   echo "=== Checking backup bucket access ==="
 
   if ! gsutil ls "gs://${BACKUP_BUCKET_NAME}/n8n/" >/dev/null 2>&1; then
-    echo "❌ Bucket not accessible"
-    exit 1
+  echo "❌ Bucket not accessible"
+  exit 1
   fi
-
-  LATEST=$(gsutil ls -l "gs://${BACKUP_BUCKET_NAME}/n8n/n8n-*.sql" 2>/dev/null | \
-    grep -v TOTAL | \
-    awk '$1 > 500000 {print $2, $3}' | \
-    sort | \
-    tail -n 1 | \
-    cut -d' ' -f2) || true
+  LATEST=$(gsutil ls -l gs://${BACKUP_BUCKET_NAME}/n8n/n8n-*.sql 2>/dev/null | \
+  grep -v TOTAL | \
+  awk '$1 > 500000 {print $2, $3}' | \
+  sort | \
+  tail -n 1 | \
+  cut -d' ' -f2) || true  
 
   if [ -z "$LATEST" ]; then
     echo "⚠️ No valid backup found → starting with empty DB"
@@ -410,7 +437,7 @@ if [ "$SKIP_RESTORE" != "true" ]; then
     if ! cat "/tmp/$FILENAME" | docker compose exec -T postgres \
       psql -U n8n -d n8n \
       --single-transaction \
-      --set ON_ERROR_STOP=on; then
+      --set ON_ERROR_STOP=on; then      
       echo "❌ Restore failed"
       exit 1
     fi
@@ -420,11 +447,73 @@ if [ "$SKIP_RESTORE" != "true" ]; then
 fi
 
 echo "=== Starting Application Containers (Phase 2) ==="
+# ТЕПЕРЬ безопасно поднимаем n8n и cloudflared
 docker compose up -d n8n cloudflared || {
   echo "❌ docker compose up apps failed"
   docker compose logs --tail=100
   exit 1
 }
+
+echo "=== Starting Health Check Server (port 8080) ==="
+
+cat <<'EOF' > /opt/health_server.py
+import http.server
+import socketserver
+import subprocess
+import time
+
+START_TIME = time.time()
+BOOTSTRAP_WINDOW = 1800  # 30 minutes
+
+class Handler(http.server.SimpleHTTPRequestHandler):
+    def log_message(self, format, *args):
+        pass
+        
+    def do_GET(self):
+        uptime = time.time() - START_TIME
+
+        # Phase 1: bootstrap — always healthy
+        if uptime < BOOTSTRAP_WINDOW:
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"BOOTSTRAP")
+            return
+
+        # Phase 2: real checks
+        try:
+            # check n8n
+            n8n = subprocess.run(
+                ["curl", "-sf", "http://127.0.0.1:5678/healthz"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+
+            # check postgres
+            pg = subprocess.run(
+                ["docker", "compose", "-f", "/opt/n8n/docker-compose.yml", "exec", "-T", "postgres", "pg_isready", "-U", "n8n"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+
+            if n8n.returncode == 0 and pg.returncode == 0:
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"OK")
+            else:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(b"FAIL")
+
+        except Exception:
+            self.send_response(500)
+            self.end_headers()
+            self.wfile.write(b"ERROR")
+
+with socketserver.TCPServer(("", 8080), Handler) as httpd:
+    httpd.serve_forever()
+EOF
+
+nohup python3 /opt/health_server.py >/var/log/health.log 2>&1 &
 
 echo "=== Waiting for n8n readiness ==="
 
@@ -433,11 +522,13 @@ for i in {1..60}; do
     echo "✅ n8n is ready"
     break
   fi
+
   echo "⏳ Waiting for n8n ($i/60)..."
   sleep 5
 done
 
 echo "=== Verifying n8n startup ==="
+
 
 HEALTHY=false
 last_fail="both n8n and cloudflared"
@@ -446,35 +537,44 @@ for i in {1..60}; do
   n8n_ok=false
   cf_ok=false
 
+  # Проверяем, что контейнеры вообще запущены
   n8n_running=false
   cf_running=false
 
-  if docker inspect n8n >/dev/null 2>&1 && \
-     docker inspect -f '{{.State.Running}}' n8n | grep -q true; then
-    n8n_running=true
+  # n8n container state 
+  n8n_container=$(docker compose ps -q n8n 2>/dev/null)
+  if [ -n "$n8n_container" ] && \
+   docker inspect -f '{{.State.Running}}' "$n8n_container" | grep -q true; then
+  n8n_running=true
   fi
 
-  if docker inspect cloudflared >/dev/null 2>&1 && \
-     docker inspect -f '{{.State.Running}}' cloudflared | grep -q true; then
+  # cloudflared container state
+  cf_container=$(docker compose ps -q cloudflared 2>/dev/null)
+  if [ -n "$cf_container" ] && \
+    docker inspect -f '{{.State.Running}}' "$cf_container" | grep -q true; then
     cf_running=true
   fi
 
+  # Проверка n8n
   if [ "$n8n_running" = true ] && \
      curl -sf http://127.0.0.1:5678/healthz >/dev/null 2>&1; then
     n8n_ok=true
   fi
 
+  # Проверка cloudflared
   if [ "$cf_running" = true ] && \
      curl -fsS http://127.0.0.1:2000/ready >/dev/null 2>&1; then
     cf_ok=true
   fi
 
+  # Успех
   if [ "$n8n_ok" = true ] && [ "$cf_ok" = true ]; then
     echo "✅ n8n + cloudflared are up and healthy"
     HEALTHY=true
     break
   fi
 
+  # Диагностика
   if [ "$n8n_running" = false ] || [ "$cf_running" = false ]; then
     last_fail="containers not running"
   elif [ "$n8n_ok" = false ] && [ "$cf_ok" = false ]; then
@@ -492,12 +592,16 @@ done
 if [ "$HEALTHY" = true ]; then
   echo "=== Startup complete ==="
   docker compose ps
+  
 else
   echo "❌ CRITICAL: startup failed — $last_fail did not become healthy within 10 minutes"
+
   echo "=== n8n logs ==="
   docker compose logs --tail=50 n8n
+
   echo "=== cloudflared logs ==="
   docker compose logs --tail=50 cloudflared
+
   exit 1
 fi
 
@@ -532,6 +636,7 @@ COUNT=$(docker exec "$POSTGRES_CONTAINER" psql -U n8n -d n8n -t -c "SELECT count
 echo "Workflow count: $COUNT"
 
 SIZE=$(docker exec "$POSTGRES_CONTAINER" psql -U n8n -d n8n -t -c "SELECT pg_database_size('n8n');" | xargs)
+
 echo "DB size: $SIZE"
 
 if [ "$COUNT" -lt 1 ] || [ "$SIZE" -lt 1000000 ]; then
@@ -578,48 +683,23 @@ fi
 rm -f "$FILE" "$CHECKSUM_FILE"
 
 echo "BACKUP_OK $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+# Cleanup: удалить бэкапы старше 7 дней (safety net к GCS lifecycle)
+echo "=== Cleanup old backups (> 7 days) ==="
+CUTOFF=$(date -u -d '7 days ago' +%Y%m%d)
+gsutil ls "gs://${BACKUP_BUCKET_NAME}/n8n/n8n-*.sql" 2>/dev/null | while read -r f; do
+  FDATE=$(basename "$f" | sed 's/n8n-\([0-9]*\)-.*/\1/')
+  if [[ "$FDATE" < "$CUTOFF" ]]; then
+    echo "Deleting old backup: $(basename "$f")"
+    gsutil rm "$f" "$${f}.sha256" 2>/dev/null || echo "Warning: Failed to delete $f"
+  fi
+done
 EOF
 
 chmod +x /usr/local/bin/backup.sh
 
 echo "*/10 * * * * root BACKUP_BUCKET_NAME=${BACKUP_BUCKET_NAME} flock -n /tmp/n8n-backup.lock /usr/local/bin/backup.sh > /var/log/n8n-backup.log 2>&1" > /etc/cron.d/n8n-backup
 systemctl restart cron
-
-echo "=== Starting Health Proxy ==="
-cat <<'HEALTH_EOF' > /opt/health_server.py
-import http.server
-import socketserver
-import subprocess
-
-class Handler(http.server.SimpleHTTPRequestHandler):
-    def do_GET(self):
-        try:
-            result = subprocess.run(
-                ["curl", "-sf", "http://127.0.0.1:5678/healthz"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
-            )
-            if result.returncode == 0:
-                self.send_response(200)
-                self.end_headers()
-                self.wfile.write(b"OK")
-            else:
-                self.send_response(500)
-                self.end_headers()
-                self.wfile.write(b"FAIL")
-        except Exception:
-            self.send_response(500)
-            self.end_headers()
-            self.wfile.write(b"ERROR")
-
-    def log_message(self, format, *args):
-        pass
-
-with socketserver.TCPServer(("", 8080), Handler) as httpd:
-    httpd.serve_forever()
-HEALTH_EOF
-
-nohup python3 /opt/health_server.py >/var/log/health.log 2>&1 &
 
 echo "=== ALL DONE ==="
 exit 0
