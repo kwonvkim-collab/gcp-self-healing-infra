@@ -416,16 +416,16 @@ resource "google_compute_region_instance_group_manager" "mig" {
 
   auto_healing_policies {
     health_check = google_compute_health_check.hc.id
-    # 600s > Docker start_period (420s) + 3 min safety margin.
-    # startup.sh on e2-micro must do: apt update + install docker + pull two
+    # 1800s > Docker start_period (420s) + large safety margin for cold
+    # startup.sh on e2-micro: apt update + install docker + pull two
     # container images (n8n is ~500MB uncompressed) + start containers + run
-    # n8n DB migrations. Cold path takes 6–10 min; giving MIG 10 min before
+    # n8n DB migrations. Cold path takes 6–10 min; giving MIG 30 min before
     # it starts probing avoids spurious recreation during legitimate boot.
     #
     # After initial_delay expires, GCP probes /healthz every 10s. With
-    # unhealthy_threshold=5 and check_interval=10s, detection takes ~50s, so
-    # worst-case cold MTTR ≈ 600 (initial_delay) + 50 (detection) + 360
-    # (new-VM startup) ≈ 17 min. Warm replace after template change: ~6 min
+    # unhealthy_threshold=7 and check_interval=10s, detection takes ~70s, so
+    # worst-case cold MTTR ≈ 1800 (initial_delay) + 70 (detection) + 360
+    # (new-VM startup) ≈ 37 min. Warm replace after template change: ~7 min
     # (no initial_delay on the replacement path, only detection + startup).
     initial_delay_sec = 1800
   }
