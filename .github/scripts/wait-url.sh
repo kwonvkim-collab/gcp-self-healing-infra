@@ -16,6 +16,12 @@ usage() {
   exit 2
 }
 
+# Dependency checks
+command -v curl >/dev/null 2>&1 || {
+  echo "::error::curl not found in PATH"
+  exit 1
+}
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --url)     URL="$2";           shift 2 ;;
@@ -25,7 +31,9 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-[ -z "${URL:-}" ] && usage
+if [ -z "${URL:-}" ]; then
+  usage
+fi
 
 START_TS=$(date +%s)
 ATTEMPT=0
@@ -52,9 +60,9 @@ while true; do
   fi
 
   if [ "$HTTP_CODE" = "000" ] || [ -z "$HTTP_CODE" ]; then
-    echo "Attempt $ATTEMPT — connection failed (timeout/DNS), retrying in ${POLL_INTERVAL}s..."
+    echo "Attempt $ATTEMPT (${ELAPSED}s) — connection failed (timeout/DNS), retrying in ${POLL_INTERVAL}s..."
   else
-    echo "Attempt $ATTEMPT — HTTP $HTTP_CODE, retrying in ${POLL_INTERVAL}s..."
+    echo "Attempt $ATTEMPT (${ELAPSED}s) — HTTP $HTTP_CODE, retrying in ${POLL_INTERVAL}s..."
   fi
 
   sleep $((POLL_INTERVAL + RANDOM % 5))

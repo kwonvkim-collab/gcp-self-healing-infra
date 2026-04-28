@@ -71,7 +71,7 @@ jobs:
 
       - name: Wait for VM to become healthy
         run: |
-          ./.github/scripts/wait-gcp-mig.sh \
+          bash .github/scripts/wait-gcp-mig.sh \
             --name "$MIG_NAME" \
             --region "$GCP_REGION" \
             --project "$GCP_PROJECT" \
@@ -81,7 +81,7 @@ jobs:
       - name: Health check (n8n /healthz)
         if: env.N8N_HOST != ''
         run: |
-          ./.github/scripts/wait-url.sh \
+          bash .github/scripts/wait-url.sh \
             --url "https://$N8N_HOST/healthz" \
             --code 200 \
             --timeout 600

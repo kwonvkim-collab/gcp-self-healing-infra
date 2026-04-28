@@ -14,6 +14,12 @@ usage() {
   exit 2
 }
 
+# Dependency checks
+command -v gcloud >/dev/null 2>&1 || {
+  echo "::error::gcloud not found in PATH"
+  exit 1
+}
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --name)    MIG_NAME="$2";   shift 2 ;;
@@ -25,7 +31,15 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-[ -z "${MIG_NAME:-}" ] || [ -z "${REGION:-}" ] || [ -z "${PROJECT:-}" ] && usage
+if [ -z "${MIG_NAME:-}" ] || [ -z "${REGION:-}" ] || [ -z "${PROJECT:-}" ]; then
+  usage
+fi
+
+# Verify active auth
+gcloud auth list --filter=status:ACTIVE --format="value(account)" 2>/dev/null | grep -q . || {
+  echo "::error::No active gcloud auth"
+  exit 1
+}
 
 START_TS=$(date +%s)
 ATTEMPT=0
@@ -56,7 +70,7 @@ while true; do
 
   # No instances yet
   if [ -z "$STATUSES" ]; then
-    echo "Attempt $ATTEMPT — no instances yet, waiting 10s..."
+    echo "Attempt $ATTEMPT (${ELAPSED}s) — no instances yet, waiting 10s..."
     sleep 10
     continue
   fi
@@ -64,13 +78,13 @@ while true; do
   # All instances must be RUNNING NONE
   CLEAN=$(echo "$STATUSES" | awk 'NF')
   MATCH_COUNT=$(echo "$CLEAN" | grep -cE '^RUNNING[[:space:]]+NONE$' || true)
-  TOTAL_COUNT=$(echo "$CLEAN" | wc -l)
+  TOTAL_COUNT=$(echo "$CLEAN" | wc -l | tr -d ' ')
 
   if [ "$MATCH_COUNT" -gt 0 ] && [ "$MATCH_COUNT" -eq "$TOTAL_COUNT" ]; then
     echo "::notice::All MIG instances RUNNING, action NONE ($MATCH_COUNT/$TOTAL_COUNT) after ${ELAPSED}s"
     exit 0
   fi
 
-  echo "Attempt $ATTEMPT — $MATCH_COUNT/$TOTAL_COUNT ready, waiting ${POLL_INTERVAL}s..."
+  echo "Attempt $ATTEMPT (${ELAPSED}s) — $MATCH_COUNT/$TOTAL_COUNT ready, waiting ${POLL_INTERVAL}s..."
   sleep $((POLL_INTERVAL + RANDOM % 5))
 done
