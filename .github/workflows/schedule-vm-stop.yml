@@ -44,7 +44,11 @@ jobs:
           CURRENT_SIZE=$(gcloud compute instance-groups managed describe "$MIG_NAME" \
             --region="$GCP_REGION" \
             --project="$GCP_PROJECT" \
-            --format="value(targetSize)" 2>/dev/null || echo "unknown")
+            --format="value(targetSize)" 2>/dev/null) || {
+            echo "::error::Failed to get MIG size"
+            exit 1
+          }
+          echo "::notice::Current MIG target size: $CURRENT_SIZE"
 
           if [ "$CURRENT_SIZE" = "0" ]; then
             echo "::notice::MIG already at size=0 — skipping resize"

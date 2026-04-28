@@ -45,7 +45,11 @@ jobs:
           CURRENT_SIZE=$(gcloud compute instance-groups managed describe "$MIG_NAME" \
             --region="$GCP_REGION" \
             --project="$GCP_PROJECT" \
-            --format="value(targetSize)" 2>/dev/null || echo "unknown")
+            --format="value(targetSize)" 2>/dev/null) || {
+            echo "::error::Failed to get MIG size"
+            exit 1
+          }
+          echo "::notice::Current MIG target size: $CURRENT_SIZE"
 
           if [ "$CURRENT_SIZE" = "1" ]; then
             echo "::notice::MIG already at size=1 — skipping resize"
@@ -87,8 +91,9 @@ jobs:
             fi
 
             # All instances must be RUNNING NONE (no stragglers)
-            if echo "$STATUSES" | awk 'NF' | grep -qE '^RUNNING[[:space:]]+NONE$' \
-              && ! echo "$STATUSES" | awk 'NF' | grep -vqE '^RUNNING[[:space:]]+NONE$'; then
+            CLEAN_STATUSES=$(echo "$STATUSES" | awk 'NF')
+            if echo "$CLEAN_STATUSES" | grep -qE '^RUNNING[[:space:]]+NONE$' \
+              && ! echo "$CLEAN_STATUSES" | grep -vqE '^RUNNING[[:space:]]+NONE$'; then
               echo "::notice::All MIG instances RUNNING, action NONE"
               break
             fi
@@ -117,6 +122,7 @@ jobs:
             HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
               --connect-timeout 3 --max-time 5 \
               "https://$N8N_HOST/healthz" 2>/dev/null) || true
+            : "${HTTP_CODE:=000}"
 
             if [ "$HTTP_CODE" = "200" ]; then
               ELAPSED=$(( $(date +%s) - START_TS ))
