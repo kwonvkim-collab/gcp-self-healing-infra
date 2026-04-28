@@ -42,28 +42,40 @@ jobs:
 
       - name: Resize MIG to 1
         run: |
-          echo "::notice::start — resizing $MIG_NAME to 1"
-          gcloud compute instance-groups managed resize "$MIG_NAME" \
-            --size=1 \
+          CURRENT_SIZE=$(gcloud compute instance-groups managed describe "$MIG_NAME" \
             --region="$GCP_REGION" \
             --project="$GCP_PROJECT" \
-            --quiet
+            --format="value(targetSize)" 2>/dev/null || echo "unknown")
+
+          if [ "$CURRENT_SIZE" = "1" ]; then
+            echo "::notice::MIG already at size=1 — skipping resize"
+          else
+            echo "::notice::start — resizing $MIG_NAME from $CURRENT_SIZE to 1"
+            gcloud compute instance-groups managed resize "$MIG_NAME" \
+              --size=1 \
+              --region="$GCP_REGION" \
+              --project="$GCP_PROJECT" \
+              --quiet
+          fi
 
       - name: Wait for VM to become healthy
         run: |
           echo "Waiting for MIG instance to reach RUNNING / NONE ..."
           for i in $(seq 1 30); do
-            gcloud compute instance-groups managed list-instances "$MIG_NAME" \
-              --region="$GCP_REGION" \
-              --project="$GCP_PROJECT" \
-              --format="table(instance,instanceStatus,currentAction)" 2>/dev/null || true
-
             STATUSES=$(gcloud compute instance-groups managed list-instances "$MIG_NAME" \
               --region="$GCP_REGION" \
               --project="$GCP_PROJECT" \
               --format="value(instanceStatus,currentAction)" 2>/dev/null || true)
 
-            if echo "$STATUSES" | grep -q "RUNNING.*NONE"; then
+            # Log instance table every 5th attempt for debugging
+            if [ "$((i % 5))" -eq 1 ]; then
+              gcloud compute instance-groups managed list-instances "$MIG_NAME" \
+                --region="$GCP_REGION" \
+                --project="$GCP_PROJECT" \
+                --format="table(instance,instanceStatus,currentAction)" 2>/dev/null || true
+            fi
+
+            if echo "$STATUSES" | grep -qE '^RUNNING\s+NONE$'; then
               echo "::notice::VM instance is RUNNING, MIG action NONE"
               break
             fi
@@ -74,7 +86,7 @@ jobs:
             fi
 
             echo "Attempt $i/30 — waiting 30s..."
-            sleep 30
+            sleep $((30 + RANDOM % 5))
           done
 
       - name: Health check (n8n /healthz)
@@ -85,21 +97,25 @@ jobs:
           fi
 
           echo "Waiting for n8n on https://$N8N_HOST/healthz ..."
+          START_TS=$(date +%s)
+
           for i in $(seq 1 30); do
             HTTP_CODE=$(curl -fsS -o /dev/null -w "%{http_code}" \
               --connect-timeout 3 --max-time 5 \
               "https://$N8N_HOST/healthz" 2>/dev/null || true)
 
             if [ "$HTTP_CODE" = "200" ]; then
-              echo "::notice::n8n is healthy (HTTP 200)"
+              ELAPSED=$(( $(date +%s) - START_TS ))
+              echo "::notice::n8n is healthy (HTTP 200) after ${ELAPSED}s"
               exit 0
             fi
 
             echo "Attempt $i/30 — HTTP $HTTP_CODE, retrying in 20s..."
-            sleep 20
+            sleep $((20 + RANDOM % 5))
           done
 
-          echo "::error::Health check failed after $i attempts (10 min)"
+          ELAPSED=$(( $(date +%s) - START_TS ))
+          echo "::error::Health check failed after $i attempts (${ELAPSED}s)"
           exit 1
 
       - name: Send Telegram notification

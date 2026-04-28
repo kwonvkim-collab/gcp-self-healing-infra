@@ -41,12 +41,21 @@ jobs:
 
       - name: Resize MIG to 0
         run: |
-          echo "::notice::stop — resizing $MIG_NAME to 0"
-          gcloud compute instance-groups managed resize "$MIG_NAME" \
-            --size=0 \
+          CURRENT_SIZE=$(gcloud compute instance-groups managed describe "$MIG_NAME" \
             --region="$GCP_REGION" \
             --project="$GCP_PROJECT" \
-            --quiet
+            --format="value(targetSize)" 2>/dev/null || echo "unknown")
+
+          if [ "$CURRENT_SIZE" = "0" ]; then
+            echo "::notice::MIG already at size=0 — skipping resize"
+          else
+            echo "::notice::stop — resizing $MIG_NAME from $CURRENT_SIZE to 0"
+            gcloud compute instance-groups managed resize "$MIG_NAME" \
+              --size=0 \
+              --region="$GCP_REGION" \
+              --project="$GCP_PROJECT" \
+              --quiet
+          fi
 
       - name: Send Telegram notification
         if: always() && vars.TELEGRAM_CHAT_ID != ''
