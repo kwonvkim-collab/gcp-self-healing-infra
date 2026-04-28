@@ -54,7 +54,7 @@ jobs:
               --size=0 \
               --region="$GCP_REGION" \
               --project="$GCP_PROJECT" \
-              --quiet
+              --quiet || exit 1
           fi
 
       - name: Send Telegram notification
