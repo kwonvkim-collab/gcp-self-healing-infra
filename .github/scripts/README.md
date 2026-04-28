@@ -61,6 +61,13 @@ bash .github/scripts/wait-url.sh \
 
 **Exit codes:** `0` = healthy, `1` = timeout / error, `2` = bad arguments.
 
+## Design Principles
+
+- **Idempotent** — safe to re-run; no side effects on repeated calls
+- **Fail-fast** — dependency and auth checks before any work; clear exit codes
+- **Observable** — elapsed time, attempt count, and instance state in every log line
+- **Safe defaults** — timeouts prevent infinite loops; jitter prevents thundering herd
+
 ## Dependencies
 
 - `wait-gcp-mig.sh`: `gcloud` (authenticated), `awk`, `grep`

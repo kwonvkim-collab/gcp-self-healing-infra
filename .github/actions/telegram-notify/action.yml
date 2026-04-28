@@ -65,12 +65,12 @@ runs:
             disable_web_page_preview: true
           } + (if $thread_id != "" and ($thread_id | test("^[0-9]+$")) then {message_thread_id: ($thread_id | tonumber)} else {} end)')
 
-        RESP=$(curl -s -X POST \
+        RESP=$(curl -sf -X POST \
           "https://api.telegram.org/bot${{ inputs.bot_token }}/sendMessage" \
           -H "Content-Type: application/json" \
           -d "$PAYLOAD" 2>/dev/null || true)
 
-        OK=$(echo "$RESP" | jq -r '.ok // false' 2>/dev/null) || OK="false"
+        OK=$(echo "$RESP" | jq -r '.ok' 2>/dev/null || echo "false")
         if [ "$OK" != "true" ]; then
           echo "::warning::Telegram notification failed: $RESP"
         fi
