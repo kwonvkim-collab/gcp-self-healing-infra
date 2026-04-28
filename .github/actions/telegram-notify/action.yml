@@ -28,6 +28,9 @@ runs:
     - name: Send Telegram message
       shell: bash
       run: |
+        command -v jq >/dev/null 2>&1 || { echo "::error::jq not found"; exit 1; }
+        command -v curl >/dev/null 2>&1 || { echo "::error::curl not found"; exit 1; }
+
         STATUS="${{ inputs.status }}"
         ACTION="${{ inputs.action }}"
 
@@ -60,7 +63,7 @@ runs:
             text: $text,
             parse_mode: "HTML",
             disable_web_page_preview: true
-          } + (if $thread_id != "" then {message_thread_id: ($thread_id | tonumber)} else {} end)')
+          } + (if $thread_id != "" and ($thread_id | test("^[0-9]+$")) then {message_thread_id: ($thread_id | tonumber)} else {} end)')
 
         RESP=$(curl -s -X POST \
           "https://api.telegram.org/bot${{ inputs.bot_token }}/sendMessage" \
