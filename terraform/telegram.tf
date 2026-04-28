@@ -140,7 +140,6 @@ resource "google_cloudfunctions_function" "telegram_alert" {
   }
 
   environment_variables = {
-    TELEGRAM_BOT_TOKEN = "placeholder"
     TELEGRAM_CHAT_ID   = var.telegram_chat_id
     TELEGRAM_THREAD_ID = var.telegram_thread_id
   }
