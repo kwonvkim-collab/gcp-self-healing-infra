@@ -1,0 +1,134 @@
+# Start VM: resize MIG to 1 on morning schedule or manual trigger.
+# Auth via Workload Identity Federation (same as deploy.yml, no JSON keys).
+# Disable via VM_SCHEDULE_ENABLED=false GitHub variable.
+
+name: "Start VM"
+
+on:
+  schedule:
+    - cron: '0 7 * * 1-5'  # 07:00 UTC Mon-Fri
+  workflow_dispatch: {}
+
+concurrency:
+  group: vm-schedule
+  cancel-in-progress: false
+
+jobs:
+  start:
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      vars.VM_SCHEDULE_ENABLED != 'false'
+
+    permissions:
+      contents: read
+      id-token: write
+
+    env:
+      GCP_PROJECT: ${{ vars.TF_VAR_project_id }}
+      GCP_REGION: us-central1
+      MIG_NAME: n8n-mig
+      N8N_HOST: ${{ vars.TF_VAR_n8n_public_host }}
+
+    steps:
+      - name: Auth to GCP (WIF)
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SA }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Resize MIG to 1
+        run: |
+          echo "::notice::start — resizing $MIG_NAME to 1"
+          gcloud compute instance-groups managed resize "$MIG_NAME" \
+            --size=1 \
+            --region="$GCP_REGION" \
+            --project="$GCP_PROJECT" \
+            --quiet
+
+      - name: Wait for VM to become healthy
+        run: |
+          echo "Waiting for MIG instance to reach RUNNING / NONE ..."
+          for i in $(seq 1 30); do
+            STATUS=$(gcloud compute instance-groups managed list-instances "$MIG_NAME" \
+              --region="$GCP_REGION" \
+              --project="$GCP_PROJECT" \
+              --format="value(instanceStatus,currentAction)" 2>/dev/null || true)
+
+            if echo "$STATUS" | grep -q "RUNNING.*NONE"; then
+              echo "::notice::VM instance is RUNNING, MIG action NONE"
+              break
+            fi
+
+            if [ "$i" -eq 30 ]; then
+              echo "::error::VM did not reach RUNNING/NONE within 15 minutes"
+              exit 1
+            fi
+
+            echo "Attempt $i/30 — status: $STATUS — waiting 30s..."
+            sleep 30
+          done
+
+      - name: Health check (n8n /healthz)
+        run: |
+          if [ -z "$N8N_HOST" ]; then
+            echo "::warning::N8N_HOST not set — skipping health check"
+            exit 0
+          fi
+
+          echo "Waiting for n8n on https://$N8N_HOST/healthz ..."
+          for i in $(seq 1 30); do
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+              --max-time 5 --connect-timeout 3 \
+              "https://$N8N_HOST/healthz" 2>/dev/null || true)
+
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "::notice::n8n is healthy (HTTP 200)"
+              exit 0
+            fi
+
+            echo "Attempt $i/30 — HTTP $HTTP_CODE, retrying in 20s..."
+            sleep 20
+          done
+
+          echo "::error::n8n did not become healthy within 10 minutes"
+          exit 1
+
+      - name: Send Telegram notification
+        if: always() && vars.TELEGRAM_CHAT_ID != ''
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ vars.TELEGRAM_CHAT_ID }}
+          TELEGRAM_THREAD_ID: ${{ vars.TELEGRAM_THREAD_ID }}
+        run: |
+          STATUS="${{ job.status }}"
+          if [ "$STATUS" = "success" ]; then
+            EMOJI="🟢"; TEXT="VM started and healthy"
+          else
+            EMOJI="🔴"; TEXT="VM start FAILED — check Actions log"
+          fi
+
+          MESSAGE="${EMOJI} <b>n8n VM Schedule</b>
+          ${TEXT}
+          Action: start
+          Status: ${STATUS}
+          Trigger: ${{ github.event_name }}"
+
+          PAYLOAD=$(jq -n \
+            --arg chat_id "$TELEGRAM_CHAT_ID" \
+            --arg text "$MESSAGE" \
+            --arg thread_id "$TELEGRAM_THREAD_ID" \
+            '{
+              chat_id: $chat_id,
+              text: $text,
+              parse_mode: "HTML",
+              disable_web_page_preview: true
+            } + (if $thread_id != "" then {message_thread_id: ($thread_id | tonumber)} else {} end)')
+
+          curl -sf -X POST \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" > /dev/null || echo "::warning::Telegram notification failed"
