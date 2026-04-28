@@ -87,8 +87,8 @@ jobs:
             fi
 
             # All instances must be RUNNING NONE (no stragglers)
-            if echo "$STATUSES" | grep -qE '^RUNNING\s+NONE$' \
-              && ! echo "$STATUSES" | grep -vqE '^RUNNING\s+NONE$'; then
+            if echo "$STATUSES" | awk 'NF' | grep -qE '^RUNNING[[:space:]]+NONE$' \
+              && ! echo "$STATUSES" | awk 'NF' | grep -vqE '^RUNNING[[:space:]]+NONE$'; then
               echo "::notice::All MIG instances RUNNING, action NONE"
               break
             fi
@@ -109,14 +109,14 @@ jobs:
             exit 0
           fi
 
+          echo "::notice::VM ready, starting application health check..."
           echo "Waiting for n8n on https://$N8N_HOST/healthz ..."
           START_TS=$(date +%s)
 
           for i in $(seq 1 30); do
-            CURL_OUT=$(curl -sS -o /dev/null -w "%{http_code}" \
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
               --connect-timeout 3 --max-time 5 \
-              "https://$N8N_HOST/healthz" 2>&1 || true)
-            HTTP_CODE=$(echo "$CURL_OUT" | tail -1)
+              "https://$N8N_HOST/healthz" || echo "000")
 
             if [ "$HTTP_CODE" = "200" ]; then
               ELAPSED=$(( $(date +%s) - START_TS ))
