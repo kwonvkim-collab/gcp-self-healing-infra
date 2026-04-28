@@ -70,7 +70,7 @@ runs:
           -H "Content-Type: application/json" \
           -d "$PAYLOAD" 2>/dev/null || true)
 
-        OK=$(echo "$RESP" | jq -r '.ok // false')
+        OK=$(echo "$RESP" | jq -r '.ok // false' 2>/dev/null) || OK="false"
         if [ "$OK" != "true" ]; then
           echo "::warning::Telegram notification failed: $RESP"
         fi
