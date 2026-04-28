@@ -80,6 +80,12 @@ jobs:
           # the correct values automatically without per-fork config.
           TF_VAR_wif_allowed_repository: ${{ github.repository }}
           TF_VAR_github_repository_url: ${{ github.server_url }}/${{ github.repository }}
+          # Telegram alerts (Phase 5). Bot token is a secret; chat_id and
+          # thread_id are non-sensitive config vars. When TELEGRAM_BOT_TOKEN
+          # is empty (default), the entire Telegram chain is skipped.
+          TF_VAR_telegram_bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TF_VAR_telegram_chat_id: ${{ vars.TELEGRAM_CHAT_ID }}
+          TF_VAR_telegram_thread_id: ${{ vars.TELEGRAM_THREAD_ID }}
 
       - name: Terraform Apply
         run: terraform apply -auto-approve tfplan
@@ -103,3 +109,6 @@ jobs:
           TF_VAR_slack_channel: ${{ vars.TF_VAR_slack_channel || '#n8n-ops' }}
           TF_VAR_wif_allowed_repository: ${{ github.repository }}
           TF_VAR_github_repository_url: ${{ github.server_url }}/${{ github.repository }}
+          TF_VAR_telegram_bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TF_VAR_telegram_chat_id: ${{ vars.TELEGRAM_CHAT_ID }}
+          TF_VAR_telegram_thread_id: ${{ vars.TELEGRAM_THREAD_ID }}
