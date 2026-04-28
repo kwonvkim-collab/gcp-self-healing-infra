@@ -92,9 +92,11 @@ jobs:
 
             # All instances must be RUNNING NONE (no stragglers)
             CLEAN_STATUSES=$(echo "$STATUSES" | awk 'NF')
-            if echo "$CLEAN_STATUSES" | grep -qE '^RUNNING[[:space:]]+NONE$' \
-              && ! echo "$CLEAN_STATUSES" | grep -vqE '^RUNNING[[:space:]]+NONE$'; then
-              echo "::notice::All MIG instances RUNNING, action NONE"
+            MATCH_COUNT=$(echo "$CLEAN_STATUSES" | grep -cE '^RUNNING[[:space:]]+NONE$' || true)
+            TOTAL_COUNT=$(echo "$CLEAN_STATUSES" | wc -l)
+
+            if [ "$MATCH_COUNT" -gt 0 ] && [ "$MATCH_COUNT" -eq "$TOTAL_COUNT" ]; then
+              echo "::notice::All MIG instances RUNNING, action NONE ($MATCH_COUNT/$TOTAL_COUNT)"
               break
             fi
 
@@ -130,7 +132,11 @@ jobs:
               exit 0
             fi
 
-            echo "Attempt $i/30 — HTTP $HTTP_CODE, retrying in 20s..."
+            if [ "$HTTP_CODE" = "000" ] || [ -z "$HTTP_CODE" ]; then
+              echo "Attempt $i/30 — connection failed (timeout/DNS), retrying in 20s..."
+            else
+              echo "Attempt $i/30 — HTTP $HTTP_CODE, retrying in 20s..."
+            fi
             sleep $((20 + RANDOM % 5))
           done
 
