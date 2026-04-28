@@ -16,6 +16,7 @@ concurrency:
 jobs:
   stop:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     if: >-
       github.event_name == 'workflow_dispatch' ||
       vars.VM_SCHEDULE_ENABLED != 'false'
