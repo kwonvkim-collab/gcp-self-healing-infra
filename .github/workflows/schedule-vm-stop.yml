@@ -31,6 +31,12 @@ jobs:
       MIG_NAME: n8n-mig
 
     steps:
+      - name: Checkout actions
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+
       - name: Auth to GCP (WIF)
         uses: google-github-actions/auth@v3
         with:
@@ -64,41 +70,11 @@ jobs:
 
       - name: Send Telegram notification
         if: always() && vars.TELEGRAM_CHAT_ID != ''
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ vars.TELEGRAM_CHAT_ID }}
-          TELEGRAM_THREAD_ID: ${{ vars.TELEGRAM_THREAD_ID }}
-        run: |
-          STATUS="${{ job.status }}"
-          if [ "$STATUS" = "success" ]; then
-            EMOJI="🌙"; TEXT="VM stopped (night schedule)"
-          else
-            EMOJI="🔴"; TEXT="VM stop FAILED — check Actions log"
-          fi
-
-          MESSAGE="${EMOJI} <b>n8n VM Schedule</b>
-          ${TEXT}
-          Action: stop
-          Status: ${STATUS}
-          Trigger: ${{ github.event_name }}"
-
-          PAYLOAD=$(jq -n \
-            --arg chat_id "$TELEGRAM_CHAT_ID" \
-            --arg text "$MESSAGE" \
-            --arg thread_id "$TELEGRAM_THREAD_ID" \
-            '{
-              chat_id: $chat_id,
-              text: $text,
-              parse_mode: "HTML",
-              disable_web_page_preview: true
-            } + (if $thread_id != "" then {message_thread_id: ($thread_id | tonumber)} else {} end)')
-
-          RESP=$(curl -s -X POST \
-            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-            -H "Content-Type: application/json" \
-            -d "$PAYLOAD" 2>/dev/null || true)
-
-          OK=$(echo "$RESP" | jq -r '.ok // false')
-          if [ "$OK" != "true" ]; then
-            echo "::warning::Telegram notification failed: $RESP"
-          fi
+        uses: ./.github/actions/telegram-notify
+        with:
+          bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          chat_id: ${{ vars.TELEGRAM_CHAT_ID }}
+          thread_id: ${{ vars.TELEGRAM_THREAD_ID }}
+          status: ${{ job.status }}
+          action: stop
+          trigger: ${{ github.event_name }}

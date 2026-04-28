@@ -1,0 +1,73 @@
+name: "Telegram Notify"
+description: "Send a notification to Telegram (with optional topic/thread support)"
+
+inputs:
+  bot_token:
+    description: "Telegram bot token"
+    required: true
+  chat_id:
+    description: "Telegram chat ID"
+    required: true
+  thread_id:
+    description: "Telegram message_thread_id (topic)"
+    required: false
+    default: ""
+  status:
+    description: "Job status (success/failure/cancelled)"
+    required: true
+  action:
+    description: "Action performed (start/stop)"
+    required: true
+  trigger:
+    description: "Trigger source (schedule/workflow_dispatch)"
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Send Telegram message
+      shell: bash
+      run: |
+        STATUS="${{ inputs.status }}"
+        ACTION="${{ inputs.action }}"
+
+        if [ "$ACTION" = "start" ]; then
+          if [ "$STATUS" = "success" ]; then
+            EMOJI="🟢"; TEXT="VM started and healthy"
+          else
+            EMOJI="🔴"; TEXT="VM start FAILED — check Actions log"
+          fi
+        else
+          if [ "$STATUS" = "success" ]; then
+            EMOJI="🌙"; TEXT="VM stopped (night schedule)"
+          else
+            EMOJI="🔴"; TEXT="VM stop FAILED — check Actions log"
+          fi
+        fi
+
+        MESSAGE="${EMOJI} <b>n8n VM Schedule</b>
+        ${TEXT}
+        Action: ${ACTION}
+        Status: ${STATUS}
+        Trigger: ${{ inputs.trigger }}"
+
+        PAYLOAD=$(jq -n \
+          --arg chat_id "${{ inputs.chat_id }}" \
+          --arg text "$MESSAGE" \
+          --arg thread_id "${{ inputs.thread_id }}" \
+          '{
+            chat_id: $chat_id,
+            text: $text,
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          } + (if $thread_id != "" then {message_thread_id: ($thread_id | tonumber)} else {} end)')
+
+        RESP=$(curl -s -X POST \
+          "https://api.telegram.org/bot${{ inputs.bot_token }}/sendMessage" \
+          -H "Content-Type: application/json" \
+          -d "$PAYLOAD" 2>/dev/null || true)
+
+        OK=$(echo "$RESP" | jq -r '.ok // false')
+        if [ "$OK" != "true" ]; then
+          echo "::warning::Telegram notification failed: $RESP"
+        fi
