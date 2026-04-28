@@ -163,7 +163,12 @@ jobs:
               disable_web_page_preview: true
             } + (if $thread_id != "" then {message_thread_id: ($thread_id | tonumber)} else {} end)')
 
-          curl -sf -X POST \
+          RESP=$(curl -s -X POST \
             "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
             -H "Content-Type: application/json" \
-            -d "$PAYLOAD" > /dev/null || echo "::warning::Telegram notification failed"
+            -d "$PAYLOAD" 2>/dev/null || true)
+
+          OK=$(echo "$RESP" | jq -r '.ok // false')
+          if [ "$OK" != "true" ]; then
+            echo "::warning::Telegram notification failed: $RESP"
+          fi
