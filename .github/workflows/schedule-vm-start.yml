@@ -77,6 +77,10 @@ jobs:
 
             # No instances yet (VM still being created)
             if [ -z "$STATUSES" ]; then
+              if [ "$i" -eq 30 ]; then
+                echo "::error::No MIG instances appeared after $i attempts"
+                exit 1
+              fi
               echo "Attempt $i/30 — no instances yet, waiting 10s..."
               sleep 10
               continue
