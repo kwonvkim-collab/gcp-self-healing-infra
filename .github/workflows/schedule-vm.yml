@@ -124,6 +124,11 @@ jobs:
               break
             fi
 
+            if [ "$i" -eq 30 ]; then
+              echo "::error::VM did not reach RUNNING state within 15 minutes"
+              exit 1
+            fi
+
             echo "Attempt $i/30 — waiting 30s..."
             sleep 30
           done
@@ -179,6 +184,7 @@ jobs:
           fi
 
           MESSAGE="${EMOJI} <b>n8n VM Schedule</b>
+          ${TEXT}
           Action: ${ACTION}
           Status: ${STATUS}
           Trigger: ${{ github.event_name }}"
