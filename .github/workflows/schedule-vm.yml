@@ -108,12 +108,6 @@ jobs:
           # MIG needs time: VM creation + startup.sh + Docker pull + n8n boot.
           # Poll every 30s for up to 15 min (cold start takes ~10 min).
           for i in $(seq 1 30); do
-            HEALTHY=$(gcloud compute instance-groups managed describe "$MIG_NAME" \
-              --region="$GCP_REGION" \
-              --project="$GCP_PROJECT" \
-              --format="value(status.stateful.hasStatefulConfig)" 2>/dev/null || true)
-
-            # Check if any instance is running
             INSTANCES=$(gcloud compute instance-groups managed list-instances "$MIG_NAME" \
               --region="$GCP_REGION" \
               --project="$GCP_PROJECT" \
@@ -145,7 +139,7 @@ jobs:
           # n8n needs a few more minutes after VM is RUNNING (Docker start + migrations).
           # Poll every 20s for up to 10 min.
           for i in $(seq 1 30); do
-            HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" \
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
               "https://$N8N_HOST/healthz" 2>/dev/null || echo "000")
 
             if [ "$HTTP_CODE" = "200" ]; then
