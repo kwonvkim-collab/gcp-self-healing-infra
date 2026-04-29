@@ -334,6 +334,14 @@ resource "google_artifact_registry_repository_iam_member" "vm_reader" {
   member     = "serviceAccount:${google_service_account.vm_sa.email}"
 }
 
+resource "google_artifact_registry_repository_iam_member" "ci_writer" {
+  count      = var.ci_sa_email != "" ? 1 : 0
+  location   = google_artifact_registry_repository.docker.location
+  repository = google_artifact_registry_repository.docker.repository_id
+  role       = "roles/artifactregistry.writer"
+  member     = "serviceAccount:${var.ci_sa_email}"
+}
+
 locals {
   ar_prefix = "${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.docker.repository_id}"
 
@@ -434,10 +442,11 @@ resource "google_compute_instance_template" "tpl" {
   }
 
   metadata = {
-    # Block OS-login / project-wide SSH keys. Runbook procedures do not
-    # rely on interactive SSH — everything is either a `terraform apply`
-    # or a serial-console break-glass. Closes Checkov CKV_GCP_32.
+    # Block project-wide SSH keys — only OS Login is allowed for SSH.
+    # Closes Checkov CKV_GCP_32. CI uses OS Login via IAP for in-place
+    # app deploys (app-deploy.yml).
     block-project-ssh-keys = "true"
+    enable-oslogin         = "TRUE"
     startup-script = templatefile("${path.module}/../scripts/startup.sh", {
       db_host               = local.effective_db_host
       db_user               = var.db_user
@@ -605,8 +614,8 @@ resource "google_billing_budget" "monthly_cap" {
 # GitHub Actions uses `gcloud compute ssh --tunnel-through-iap` to update
 # Docker containers without recreating the VM. The firewall rule allows
 # IAP's IP range (35.235.240.0/20) to reach port 22 on n8n-tagged VMs.
-# IAM bindings grant the CI service account tunnel access + OS Login.
-# Both are conditional on var.ci_sa_email being set.
+# IAM bindings grant the CI service account tunnel access, OS Login,
+# and AR writer. All are conditional on var.ci_sa_email being set.
 
 resource "google_compute_firewall" "allow_iap_ssh" {
   name    = "allow-iap-ssh"
@@ -633,6 +642,13 @@ resource "google_project_iam_member" "ci_compute_viewer" {
   count   = var.ci_sa_email != "" ? 1 : 0
   project = var.project_id
   role    = "roles/compute.viewer"
+  member  = "serviceAccount:${var.ci_sa_email}"
+}
+
+resource "google_project_iam_member" "ci_os_login" {
+  count   = var.ci_sa_email != "" ? 1 : 0
+  project = var.project_id
+  role    = "roles/compute.osLogin"
   member  = "serviceAccount:${var.ci_sa_email}"
 }
 
