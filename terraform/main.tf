@@ -314,6 +314,11 @@ resource "google_artifact_registry_repository" "docker" {
   description   = "Pre-pulled Docker images for n8n infrastructure"
 
   cleanup_policies {
+    id     = "delete-old"
+    action = "DELETE"
+  }
+
+  cleanup_policies {
     id     = "keep-last-3"
     action = "KEEP"
     most_recent_versions {

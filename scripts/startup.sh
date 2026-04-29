@@ -350,6 +350,13 @@ else
   retry timeout 600 docker pull "$CLOUDFLARED_IMAGE"
 fi
 
+# Persist resolved images to .env so manual docker compose operations
+# (up, pull, restart) work after startup.sh exits.
+{
+  echo "N8N_IMAGE=$N8N_IMAGE"
+  echo "CLOUDFLARED_IMAGE=$CLOUDFLARED_IMAGE"
+} >> /opt/n8n/.env
+
 echo "Using images: n8n=$N8N_IMAGE cloudflared=$CLOUDFLARED_IMAGE"
 docker compose config >/dev/null || { echo "❌ Invalid docker-compose.yml"; exit 1; }
 
