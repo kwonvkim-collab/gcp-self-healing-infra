@@ -101,10 +101,6 @@ jobs:
           TF_VAR_n8n_public_host: ${{ vars.TF_VAR_n8n_public_host }}
           TF_VAR_oncall_email: ${{ vars.TF_VAR_oncall_email }}
           TF_VAR_billing_account_id: ${{ secrets.GCP_BILLING_ACCOUNT_ID }}
-          # Same `||` fallback as the Plan step above: GitHub Actions
-          # vars.* are only accessible in ${{ ... }} expressions, not
-          # auto-exported as env vars, so we must list the var explicitly
-          # with a fallback that preserves Terraform's `default = "#n8n-ops"`.
           TF_VAR_slack_auth_token: ${{ secrets.SLACK_BOT_TOKEN }}
           TF_VAR_slack_channel: ${{ vars.TF_VAR_slack_channel || '#n8n-ops' }}
           TF_VAR_wif_allowed_repository: ${{ github.repository }}
@@ -112,3 +108,35 @@ jobs:
           TF_VAR_telegram_bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TF_VAR_telegram_chat_id: ${{ vars.TELEGRAM_CHAT_ID }}
           TF_VAR_telegram_thread_id: ${{ vars.TELEGRAM_THREAD_ID }}
+
+      # Mirror public Docker images into Artifact Registry so that
+      # subsequent VM boots pull from the same GCP region (fast + no
+      # Docker Hub rate-limits).  Runs after apply so the AR repo exists.
+      # First deploy: AR is empty → VM falls back to public; mirror
+      # populates AR for the next boot.
+      - name: Mirror images to Artifact Registry
+        working-directory: .
+        run: |
+          PROJECT="${{ vars.TF_VAR_project_id }}"
+          REGION="${{ vars.TF_VAR_region || 'us-central1' }}"
+          AR="${REGION}-docker.pkg.dev/${PROJECT}/n8n-docker"
+
+          gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+
+          # Read image defaults from variables.tf; allow GitHub vars override
+          N8N_FULL="${{ vars.TF_VAR_n8n_image || 'docker.n8n.io/n8nio/n8n:2.17.7' }}"
+          CF_FULL="${{ vars.TF_VAR_cloudflared_image || 'cloudflare/cloudflared:2026.3.0' }}"
+
+          # Extract tag (strip registry prefix and @sha256 digest)
+          N8N_TAG=$(echo "$N8N_FULL" | grep -oP ':\K[^@]+')
+          CF_TAG=$(echo "$CF_FULL" | grep -oP ':\K[^@]+')
+
+          for PAIR in "${N8N_FULL} ${AR}/n8n:${N8N_TAG}" \
+                      "${CF_FULL} ${AR}/cloudflared:${CF_TAG}"; do
+            SRC="${PAIR%% *}"
+            DST="${PAIR#* }"
+            echo ">>> Mirroring ${SRC} → ${DST}"
+            docker pull "${SRC}"
+            docker tag  "${SRC}" "${DST}"
+            docker push "${DST}"
+          done

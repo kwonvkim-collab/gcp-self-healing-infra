@@ -43,6 +43,7 @@ resource "google_project_service" "required" {
     # but makes the private IP creation path work once peering is in
     # place.
     "servicenetworking.googleapis.com",
+    "artifactregistry.googleapis.com",
   ])
 
   service = each.key
@@ -299,7 +300,45 @@ resource "google_storage_bucket" "logs_audit" {
 }
 
 # ==========================================
-# 2. COMPUTE RESOURCES
+# 2. ARTIFACT REGISTRY (regional image cache)
+# ==========================================
+# Mirror public Docker images (n8n, cloudflared) into the same GCP region
+# so VM boots pull locally instead of crossing the internet to Docker Hub.
+# Reduces cold-start pull from ~8 min to ~1 min on e2-micro and avoids
+# Docker Hub anonymous rate limits (100 pulls / 6h).
+
+resource "google_artifact_registry_repository" "docker" {
+  location      = var.region
+  repository_id = "n8n-docker"
+  format        = "DOCKER"
+  description   = "Pre-pulled Docker images for n8n infrastructure"
+
+  cleanup_policies {
+    id     = "keep-last-3"
+    action = "KEEP"
+    most_recent_versions {
+      keep_count = 3
+    }
+  }
+}
+
+resource "google_artifact_registry_repository_iam_member" "vm_reader" {
+  location   = google_artifact_registry_repository.docker.location
+  repository = google_artifact_registry_repository.docker.repository_id
+  role       = "roles/artifactregistry.reader"
+  member     = "serviceAccount:${google_service_account.vm_sa.email}"
+}
+
+locals {
+  ar_prefix       = "${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.docker.repository_id}"
+  n8n_tag         = regex("^[^:]+:([^@]+)", var.n8n_image)[0]
+  cloudflared_tag = regex("^[^:]+:([^@]+)", var.cloudflared_image)[0]
+  n8n_ar_image    = "${local.ar_prefix}/n8n:${local.n8n_tag}"
+  cf_ar_image     = "${local.ar_prefix}/cloudflared:${local.cloudflared_tag}"
+}
+
+# ==========================================
+# 3. COMPUTE RESOURCES
 # ==========================================
 
 resource "google_compute_health_check" "hc" {
@@ -388,6 +427,9 @@ resource "google_compute_instance_template" "tpl" {
       db_port               = "5432"
       n8n_image             = var.n8n_image
       cloudflared_image     = var.cloudflared_image
+      n8n_ar_image          = local.n8n_ar_image
+      cloudflared_ar_image  = local.cf_ar_image
+      ar_location           = var.region
       BACKUP_BUCKET_NAME    = var.backup_bucket_name
     })
   }
@@ -452,13 +494,18 @@ resource "google_compute_region_instance_group_manager" "mig" {
     initial_delay_sec = 1800
   }
 
+  # Canary update: a new VM is created alongside the old one. The old VM
+  # keeps serving until the replacement passes the health check. If the
+  # new VM never becomes healthy the old one stays and the failed instance
+  # is removed by auto-healing. max_surge_fixed must be 0 or ≥ number of
+  # distribution zones for a regional MIG, hence length(var.mig_zones).
   update_policy {
     type                         = "PROACTIVE"
     minimal_action               = "REPLACE"
-    max_surge_fixed              = 0
-    max_unavailable_fixed        = length(var.mig_zones) # must be ≥ number of distribution zones on a regional MIG
-    replacement_method           = "RECREATE"
-    instance_redistribution_type = "NONE" # target_size=1; redistribution is meaningless and would cause needless relocations
+    max_surge_fixed              = length(var.mig_zones)
+    max_unavailable_fixed        = 0
+    replacement_method           = "SUBSTITUTE"
+    instance_redistribution_type = "NONE"
   }
 }
 

@@ -219,6 +219,8 @@ echo "=== Pre-flight Variables Check ==="
 
 [ -z "${n8n_image}" ] && { echo "❌ n8n_image is empty"; exit 1; }
 [ -z "${cloudflared_image}" ] && { echo "❌ cloudflared_image is empty"; exit 1; }
+[ -z "${n8n_ar_image}" ] && { echo "❌ n8n_ar_image is empty"; exit 1; }
+[ -z "${cloudflared_ar_image}" ] && { echo "❌ cloudflared_ar_image is empty"; exit 1; }
 [ -z "${BACKUP_BUCKET_NAME}" ] && { echo "❌ BACKUP_BUCKET_NAME is empty"; exit 1; }
 
 echo "✅ All required variables present"
@@ -320,18 +322,30 @@ echo "=== Cleaning package cache before image pull ==="
 apt-get clean
 rm -rf /var/lib/apt/lists/*
 
-
+echo "=== Configure Artifact Registry ==="
+gcloud auth configure-docker ${ar_location}-docker.pkg.dev --quiet || true
 
 echo "=== Pulling n8n image ==="
-retry timeout 1800 docker pull "${n8n_image}" || {
-  echo "❌ Docker pull failed"
-  free -m
-  exit 1
-}
-
+if timeout 600 docker pull "${n8n_ar_image}" 2>/dev/null; then
+  echo "✅ Pulled n8n from Artifact Registry"
+  docker tag "${n8n_ar_image}" "${n8n_image}" 2>/dev/null || true
+else
+  echo "⚠️  AR miss, pulling n8n from public registry"
+  retry timeout 1800 docker pull "${n8n_image}" || {
+    echo "❌ Docker pull failed"
+    free -m
+    exit 1
+  }
+fi
 
 echo "=== Pulling cloudflared image ==="
-retry timeout 600 docker pull "${cloudflared_image}"
+if timeout 300 docker pull "${cloudflared_ar_image}" 2>/dev/null; then
+  echo "✅ Pulled cloudflared from Artifact Registry"
+  docker tag "${cloudflared_ar_image}" "${cloudflared_image}" 2>/dev/null || true
+else
+  echo "⚠️  AR miss, pulling cloudflared from public registry"
+  retry timeout 600 docker pull "${cloudflared_image}"
+fi
 
 
 echo "=== Starting Containers ==="
