@@ -45,9 +45,15 @@ if [ -b "$DATA_DISK" ]; then
   if ! blkid "$DATA_DISK" >/dev/null 2>&1; then
     echo "Formatting new data disk..."
     mkfs.ext4 -m 0 -F -E lazy_itable_init=0,lazy_journal_init=0 "$DATA_DISK"
+  else
+    # Check and repair filesystem before mount (protection against corruption)
+    fsck -a "$DATA_DISK" || true
   fi
 
-  mount -o discard,defaults "$DATA_DISK" "$DATA_MOUNT"
+  mount -o discard,defaults "$DATA_DISK" "$DATA_MOUNT" || {
+    echo "❌ Failed to mount data disk"
+    exit 1
+  }
   echo "✅ Data disk mounted at $DATA_MOUNT"
 
   # Ensure Postgres data directory exists
@@ -358,8 +364,11 @@ export CLOUDFLARED_IMAGE="${cloudflared_ar_image}"
 
 # Sequential pull: n8n first (critical), then cloudflared.
 # e2-micro has limited RAM/CPU — parallel pulls risk OOM or disk throttling.
+# Cache check: skip pull entirely if image already present (saves 5-20s).
 echo "=== Pulling n8n image ==="
-if timeout 600 docker pull "$N8N_IMAGE" 2>/dev/null; then
+if docker image inspect "$N8N_IMAGE" >/dev/null 2>&1; then
+  echo "✅ n8n image already cached"
+elif timeout 600 docker pull "$N8N_IMAGE" 2>/dev/null; then
   echo "✅ Pulled n8n from Artifact Registry"
 else
   echo "⚠️  AR miss, falling back to public registry for n8n"
@@ -372,7 +381,9 @@ else
 fi
 
 echo "=== Pulling cloudflared image ==="
-if timeout 300 docker pull "$CLOUDFLARED_IMAGE" 2>/dev/null; then
+if docker image inspect "$CLOUDFLARED_IMAGE" >/dev/null 2>&1; then
+  echo "✅ cloudflared image already cached"
+elif timeout 300 docker pull "$CLOUDFLARED_IMAGE" 2>/dev/null; then
   echo "✅ Pulled cloudflared from Artifact Registry"
 else
   echo "⚠️  AR miss, falling back to public registry for cloudflared"
