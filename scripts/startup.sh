@@ -245,7 +245,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
   n8n:
-    image: ${n8n_ar_image}
+    image: $${N8N_IMAGE}
     restart: unless-stopped
     ports:
         - "127.0.0.1:5678:5678"
@@ -302,7 +302,7 @@ services:
         condition: service_healthy
         
   cloudflared:
-    image: ${cloudflared_ar_image}
+    image: $${CLOUDFLARED_IMAGE}
     restart: unless-stopped
     command: tunnel --no-autoupdate --protocol http2 --metrics 0.0.0.0:2000 run --token $${CF_TOKEN}
     ports:
@@ -316,8 +316,6 @@ volumes:
     postgres_data:
 EOF
 
-docker compose config >/dev/null || { echo "❌ Invalid docker-compose.yml"; exit 1; }
-
 echo "=== Cleaning package cache before image pull ==="
 apt-get clean
 rm -rf /var/lib/apt/lists/*
@@ -325,13 +323,18 @@ rm -rf /var/lib/apt/lists/*
 echo "=== Configure Artifact Registry ==="
 gcloud auth configure-docker ${ar_location}-docker.pkg.dev --quiet || true
 
+# Default to Artifact Registry (same region → fast pull).
+# If AR pull fails, fall back to the public digest-pinned reference.
+export N8N_IMAGE="${n8n_ar_image}"
+export CLOUDFLARED_IMAGE="${cloudflared_ar_image}"
+
 echo "=== Pulling n8n image ==="
-if timeout 600 docker pull "${n8n_ar_image}" 2>/dev/null; then
+if timeout 600 docker pull "$N8N_IMAGE" 2>/dev/null; then
   echo "✅ Pulled n8n from Artifact Registry"
 else
   echo "⚠️  AR miss, falling back to public registry for n8n"
-  sed -i "s|${n8n_ar_image}|${n8n_image}|g" /opt/n8n/docker-compose.yml
-  retry timeout 1800 docker pull "${n8n_image}" || {
+  export N8N_IMAGE="${n8n_image}"
+  retry timeout 1800 docker pull "$N8N_IMAGE" || {
     echo "❌ Docker pull failed"
     free -m
     exit 1
@@ -339,13 +342,16 @@ else
 fi
 
 echo "=== Pulling cloudflared image ==="
-if timeout 300 docker pull "${cloudflared_ar_image}" 2>/dev/null; then
+if timeout 300 docker pull "$CLOUDFLARED_IMAGE" 2>/dev/null; then
   echo "✅ Pulled cloudflared from Artifact Registry"
 else
   echo "⚠️  AR miss, falling back to public registry for cloudflared"
-  sed -i "s|${cloudflared_ar_image}|${cloudflared_image}|g" /opt/n8n/docker-compose.yml
-  retry timeout 600 docker pull "${cloudflared_image}"
+  export CLOUDFLARED_IMAGE="${cloudflared_image}"
+  retry timeout 600 docker pull "$CLOUDFLARED_IMAGE"
 fi
+
+echo "Using images: n8n=$N8N_IMAGE cloudflared=$CLOUDFLARED_IMAGE"
+docker compose config >/dev/null || { echo "❌ Invalid docker-compose.yml"; exit 1; }
 
 
 echo "=== Starting Containers ==="

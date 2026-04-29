@@ -330,11 +330,9 @@ resource "google_artifact_registry_repository_iam_member" "vm_reader" {
 }
 
 locals {
-  ar_prefix       = "${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.docker.repository_id}"
-  n8n_tag         = regex("^[^:]+:([^@]+)", var.n8n_image)[0]
-  cloudflared_tag = regex("^[^:]+:([^@]+)", var.cloudflared_image)[0]
-  n8n_ar_image    = "${local.ar_prefix}/n8n:${local.n8n_tag}"
-  cf_ar_image     = "${local.ar_prefix}/cloudflared:${local.cloudflared_tag}"
+  ar_prefix    = "${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.docker.repository_id}"
+  n8n_ar_image = "${local.ar_prefix}/n8n:${var.n8n_image_tag}"
+  cf_ar_image  = "${local.ar_prefix}/cloudflared:${var.cloudflared_image_tag}"
 }
 
 # ==========================================

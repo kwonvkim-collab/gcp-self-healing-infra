@@ -198,10 +198,22 @@ variable "n8n_image" {
   default     = "docker.n8n.io/n8nio/n8n:2.17.7@sha256:a293b89bac876872a0c1ef0fbbb7ce056aa2d215f62917acf032ecb8010199af"
 }
 
+variable "n8n_image_tag" {
+  description = "Short tag for n8n image, used to reference the Artifact Registry mirror. Must match the tag portion of var.n8n_image."
+  type        = string
+  default     = "2.17.7"
+}
+
 variable "cloudflared_image" {
   description = "cloudflared container image, including registry, repo, tag and SHA256 digest. Used by scripts/startup.sh in the docker-compose service definition."
   type        = string
   default     = "cloudflare/cloudflared:2026.3.0@sha256:6b599ca3e974349ead3286d178da61d291961182ec3fe9c505e1dd02c8ac31b0"
+}
+
+variable "cloudflared_image_tag" {
+  description = "Short tag for cloudflared image, used to reference the Artifact Registry mirror. Must match the tag portion of var.cloudflared_image."
+  type        = string
+  default     = "2026.3.0"
 }
 
 # --------------------------------------------------------
