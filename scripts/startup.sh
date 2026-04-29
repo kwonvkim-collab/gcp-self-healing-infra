@@ -245,7 +245,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
   n8n:
-    image: ${n8n_image}
+    image: ${n8n_ar_image}
     restart: unless-stopped
     ports:
         - "127.0.0.1:5678:5678"
@@ -302,7 +302,7 @@ services:
         condition: service_healthy
         
   cloudflared:
-    image: ${cloudflared_image}
+    image: ${cloudflared_ar_image}
     restart: unless-stopped
     command: tunnel --no-autoupdate --protocol http2 --metrics 0.0.0.0:2000 run --token $${CF_TOKEN}
     ports:
@@ -328,9 +328,9 @@ gcloud auth configure-docker ${ar_location}-docker.pkg.dev --quiet || true
 echo "=== Pulling n8n image ==="
 if timeout 600 docker pull "${n8n_ar_image}" 2>/dev/null; then
   echo "✅ Pulled n8n from Artifact Registry"
-  docker tag "${n8n_ar_image}" "${n8n_image}" 2>/dev/null || true
 else
-  echo "⚠️  AR miss, pulling n8n from public registry"
+  echo "⚠️  AR miss, falling back to public registry for n8n"
+  sed -i "s|${n8n_ar_image}|${n8n_image}|g" /opt/n8n/docker-compose.yml
   retry timeout 1800 docker pull "${n8n_image}" || {
     echo "❌ Docker pull failed"
     free -m
@@ -341,9 +341,9 @@ fi
 echo "=== Pulling cloudflared image ==="
 if timeout 300 docker pull "${cloudflared_ar_image}" 2>/dev/null; then
   echo "✅ Pulled cloudflared from Artifact Registry"
-  docker tag "${cloudflared_ar_image}" "${cloudflared_image}" 2>/dev/null || true
 else
-  echo "⚠️  AR miss, pulling cloudflared from public registry"
+  echo "⚠️  AR miss, falling back to public registry for cloudflared"
+  sed -i "s|${cloudflared_ar_image}|${cloudflared_image}|g" /opt/n8n/docker-compose.yml
   retry timeout 600 docker pull "${cloudflared_image}"
 fi
 
