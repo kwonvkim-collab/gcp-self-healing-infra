@@ -29,6 +29,12 @@ variable "mig_zones" {
   default     = ["us-central1-a", "us-central1-b", "us-central1-f"]
 }
 
+variable "data_disk_size_gb" {
+  description = "Size in GB for the persistent data disk (Postgres). 10GB is the GCP Free Tier minimum for pd-standard. Increase if n8n DB grows beyond this."
+  type        = number
+  default     = 10
+}
+
 variable "billing_account_id" {
   description = "GCP billing account ID the project is attached to (format: 'AAAAAA-BBBBBB-CCCCCC'). When set, enables the google_billing_budget cost guardrail; when empty (default), the budget resource is not created and cost alerting is left off. Find the ID via `gcloud beta billing accounts list`."
   type        = string

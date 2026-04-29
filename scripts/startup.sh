@@ -34,6 +34,31 @@ retry() {
   return 1
 }
 
+echo "=== Mount Persistent Data Disk ==="
+DATA_DISK="/dev/disk/by-id/google-n8n-data"
+DATA_MOUNT="/mnt/data"
+
+if [ -b "$DATA_DISK" ]; then
+  mkdir -p "$DATA_MOUNT"
+
+  # Format only if the disk has no filesystem (first boot)
+  if ! blkid "$DATA_DISK" >/dev/null 2>&1; then
+    echo "Formatting new data disk..."
+    mkfs.ext4 -m 0 -F -E lazy_itable_init=0,lazy_journal_init=0 "$DATA_DISK"
+  fi
+
+  mount -o discard,defaults "$DATA_DISK" "$DATA_MOUNT"
+  echo "✅ Data disk mounted at $DATA_MOUNT"
+
+  # Ensure Postgres data directory exists
+  mkdir -p "$DATA_MOUNT/postgres"
+  chown -R 999:999 "$DATA_MOUNT/postgres"
+else
+  echo "⚠️ Data disk not found at $DATA_DISK — using ephemeral storage"
+  mkdir -p /mnt/data/postgres
+  chown -R 999:999 /mnt/data/postgres
+fi
+
 echo "=== Install Docker ==="
 if command -v docker >/dev/null 2>&1 && command -v gcloud >/dev/null 2>&1; then
   echo "✅ Docker and gcloud already installed, skipping apt"
@@ -248,7 +273,7 @@ services:
       timeout: 3s
       retries: 5
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - /mnt/data/postgres:/var/lib/postgresql/data
   n8n:
     image: $${N8N_IMAGE}
     restart: unless-stopped
@@ -317,8 +342,6 @@ services:
     depends_on:
       n8n:
         condition: service_healthy
-volumes:
-    postgres_data:
 EOF
 
 echo "=== Cleaning package cache before image pull ==="
@@ -405,7 +428,10 @@ fi
 
 
 
-echo "=== Restore latest backup ==="
+echo "=== Backup Restore (DR only) ==="
+# With a persistent data disk, Postgres data survives VM recreation.
+# Restore only runs on first boot (empty PD) or after catastrophic
+# disk failure — it is a DR mechanism, not a deploy mechanism.
 SKIP_RESTORE=false
 
 echo "=== Checking if DB already has data ==="

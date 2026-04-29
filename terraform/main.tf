@@ -393,6 +393,17 @@ resource "google_compute_instance_template" "tpl" {
     boot         = true
   }
 
+  # Persistent data disk for Postgres. Survives VM recreation via MIG
+  # stateful_disk config below — data is 100% intact across deploys.
+  # Device name maps to /dev/disk/by-id/google-n8n-data in the guest OS.
+  disk {
+    device_name  = "n8n-data"
+    disk_size_gb = var.data_disk_size_gb
+    disk_type    = "pd-standard"
+    auto_delete  = false
+    boot         = false
+  }
+
   # Shielded VM (Secure Boot + vTPM + integrity monitoring). Free-Tier
   # compatible; protects against boot-time rootkits and kernel-level
   # tampering. Closes Checkov CKV_GCP_39.
@@ -463,58 +474,59 @@ resource "google_compute_instance_template" "tpl" {
 }
 
 # ==========================================
-# Managed Instance Group (regional, Phase 4)
+# Managed Instance Group (regional, Phase 4 → Phase 5: stateful disk)
 # ==========================================
-# Replaces the previous zonal google_compute_instance_group_manager. The
-# MIG still runs a single e2-micro (target_size=1, Free Tier compliant),
-# but it is now free to place that VM in any zone of us-central1 listed
-# in var.mig_zones. Practical effect on SLO: a zonal outage (whole AZ
-# goes dark) no longer keeps the VM dead — MIG's self-healing path tries
-# a surviving zone on the next replacement. Expected zonal-failover MTTR
-# is the same as cold start (≆17 min worst case) because the replacement
-# path always runs full startup.sh on a fresh VM.
+# Single e2-micro (target_size=1, Free Tier compliant) with a persistent
+# data disk for Postgres. The MIG is pinned to var.zone because the data
+# disk is zonal — it cannot be attached cross-zone. Trade-off: we lose
+# multi-zone failover (Phase 4 benefit) but gain zero-data-loss deploys.
+# To restore multi-zone resilience, enable Cloud SQL (var.cloud_sql_managed)
+# which externalizes the DB and allows SUBSTITUTE + multi-zone MIG.
 #
-# State-migration note: on first apply the old zonal resource is
-# destroyed and this regional resource is created. Brief downtime during
-# the cutover is expected; see Runbook §Backup & DR for the procedure.
+# Update strategy: RECREATE (not SUBSTITUTE/canary) because a persistent
+# disk cannot be attached to two VMs simultaneously. On template change:
+# MIG deletes old VM → detaches data disk → creates new VM → attaches
+# same data disk → Postgres starts with 100% current data. Downtime
+# equals VM boot time (~1-2 min with AR image cache).
+#
+# Backup cron remains as DR for catastrophic disk failure, not for deploys.
 resource "google_compute_region_instance_group_manager" "mig" {
   name                      = "n8n-mig"
   base_instance_name        = "n8n"
   region                    = var.region
-  distribution_policy_zones = var.mig_zones
+  distribution_policy_zones = [var.zone]
   target_size               = 1
 
   version {
     instance_template = google_compute_instance_template.tpl.id
   }
 
-  auto_healing_policies {
-    health_check = google_compute_health_check.hc.id
-    # 600s > Docker start_period (420s) + 3 min safety margin.
-    # startup.sh on e2-micro must do: apt update + install docker + pull two
-    # container images (n8n is ~500MB uncompressed) + start containers + run
-    # n8n DB migrations. Cold path takes 6–10 min; giving MIG 10 min before
-    # it starts probing avoids spurious recreation during legitimate boot.
-    #
-    # After initial_delay expires, GCP probes /healthz every 10s. With
-    # unhealthy_threshold=5 and check_interval=10s, detection takes ~50s, so
-    # worst-case cold MTTR ≈ 600 (initial_delay) + 50 (detection) + 360
-    # (new-VM startup) ≈ 17 min. Warm replace after template change: ~6 min
-    # (no initial_delay on the replacement path, only detection + startup).
-    initial_delay_sec = 1800
+  # Preserve the data disk across instance recreations. MIG detaches it
+  # from the dying VM and reattaches to the replacement — Postgres data
+  # survives every deploy, auto-heal, and manual recreation.
+  stateful_disk {
+    device_name = "n8n-data"
+    delete_rule = "NEVER"
   }
 
-  # Canary update: a new VM is created alongside the old one. The old VM
-  # keeps serving until the replacement passes the health check. If the
-  # new VM never becomes healthy the old one stays and the failed instance
-  # is removed by auto-healing. max_surge_fixed must be 0 or ≥ number of
-  # distribution zones for a regional MIG, hence length(var.mig_zones).
+  auto_healing_policies {
+    health_check = google_compute_health_check.hc.id
+    # With persistent disk + AR cache, cold start is ~2-4 min (no backup
+    # restore, images pulled from same-region AR). 600s initial delay
+    # gives ample safety margin.
+    initial_delay_sec = 600
+  }
+
+  # RECREATE: old VM deleted before new one starts. Required because the
+  # persistent data disk cannot be attached to two VMs at once.
+  # Brief downtime (~1-2 min) is acceptable for single-instance behind
+  # Cloudflare Tunnel. For zero-downtime, enable Cloud SQL + SUBSTITUTE.
   update_policy {
     type                         = "PROACTIVE"
     minimal_action               = "REPLACE"
-    max_surge_fixed              = length(var.mig_zones)
-    max_unavailable_fixed        = 0
-    replacement_method           = "SUBSTITUTE"
+    max_surge_fixed              = 0
+    max_unavailable_fixed        = 1
+    replacement_method           = "RECREATE"
     instance_redistribution_type = "NONE"
   }
 }
