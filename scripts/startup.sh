@@ -333,50 +333,29 @@ gcloud auth configure-docker ${ar_location}-docker.pkg.dev --quiet || true
 export N8N_IMAGE="${n8n_ar_image}"
 export CLOUDFLARED_IMAGE="${cloudflared_ar_image}"
 
-# Pull both images in parallel for ~20-40% faster startup.
-# Each subshell tries AR first, falls back to public on miss.
-pull_n8n() {
-  echo "=== Pulling n8n image ==="
-  if timeout 600 docker pull "$N8N_IMAGE" 2>/dev/null; then
-    echo "✅ Pulled n8n from Artifact Registry"
-  else
-    echo "⚠️  AR miss, falling back to public registry for n8n"
-    N8N_IMAGE="${n8n_image}"
-    retry timeout 1800 docker pull "$N8N_IMAGE" || {
-      echo "❌ Docker pull failed"
-      free -m
-      return 1
-    }
-  fi
-  echo "$N8N_IMAGE" > /tmp/.n8n_image_resolved
-}
+# Sequential pull: n8n first (critical), then cloudflared.
+# e2-micro has limited RAM/CPU — parallel pulls risk OOM or disk throttling.
+echo "=== Pulling n8n image ==="
+if timeout 600 docker pull "$N8N_IMAGE" 2>/dev/null; then
+  echo "✅ Pulled n8n from Artifact Registry"
+else
+  echo "⚠️  AR miss, falling back to public registry for n8n"
+  export N8N_IMAGE="${n8n_image}"
+  retry timeout 1800 docker pull "$N8N_IMAGE" || {
+    echo "❌ Docker pull failed"
+    free -m
+    exit 1
+  }
+fi
 
-pull_cf() {
-  echo "=== Pulling cloudflared image ==="
-  if timeout 300 docker pull "$CLOUDFLARED_IMAGE" 2>/dev/null; then
-    echo "✅ Pulled cloudflared from Artifact Registry"
-  else
-    echo "⚠️  AR miss, falling back to public registry for cloudflared"
-    CLOUDFLARED_IMAGE="${cloudflared_image}"
-    retry timeout 600 docker pull "$CLOUDFLARED_IMAGE"
-  fi
-  echo "$CLOUDFLARED_IMAGE" > /tmp/.cf_image_resolved
-}
-
-pull_n8n &
-N8N_PID=$!
-pull_cf &
-CF_PID=$!
-
-# Wait for both pulls; fail if n8n pull failed
-wait "$N8N_PID" || { echo "❌ n8n image pull failed"; exit 1; }
-wait "$CF_PID"  || { echo "❌ cloudflared image pull failed"; exit 1; }
-
-# Read resolved image names from subshells
-N8N_IMAGE=$(cat /tmp/.n8n_image_resolved)
-export N8N_IMAGE
-CLOUDFLARED_IMAGE=$(cat /tmp/.cf_image_resolved)
-export CLOUDFLARED_IMAGE
+echo "=== Pulling cloudflared image ==="
+if timeout 300 docker pull "$CLOUDFLARED_IMAGE" 2>/dev/null; then
+  echo "✅ Pulled cloudflared from Artifact Registry"
+else
+  echo "⚠️  AR miss, falling back to public registry for cloudflared"
+  export CLOUDFLARED_IMAGE="${cloudflared_image}"
+  retry timeout 600 docker pull "$CLOUDFLARED_IMAGE"
+fi
 
 # Rewrite .env with secrets + resolved images so manual docker compose
 # operations (up, pull, restart) work after startup.sh exits.
