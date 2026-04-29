@@ -35,14 +35,18 @@ retry() {
 }
 
 echo "=== Install Docker ==="
-retry apt-get update
-retry apt-get install "$${APT_INSTALL_OPTS[@]}" ca-certificates curl gnupg docker.io cron postgresql-client 
-retry apt-get install "$${APT_INSTALL_OPTS[@]}" apt-transport-https 
-echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" > /etc/apt/sources.list.d/google-cloud-sdk.list
-curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | \
-gpg --dearmor --yes -o /usr/share/keyrings/cloud.google.gpg
-retry apt-get update
-retry apt-get install "$${APT_INSTALL_OPTS[@]}" google-cloud-cli
+if command -v docker >/dev/null 2>&1 && command -v gcloud >/dev/null 2>&1; then
+  echo "✅ Docker and gcloud already installed, skipping apt"
+else
+  retry apt-get update
+  retry apt-get install "$${APT_INSTALL_OPTS[@]}" ca-certificates curl gnupg docker.io cron postgresql-client 
+  retry apt-get install "$${APT_INSTALL_OPTS[@]}" apt-transport-https 
+  echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" > /etc/apt/sources.list.d/google-cloud-sdk.list
+  curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | \
+  gpg --dearmor --yes -o /usr/share/keyrings/cloud.google.gpg
+  retry apt-get update
+  retry apt-get install "$${APT_INSTALL_OPTS[@]}" google-cloud-cli
+fi
 
 
 
@@ -328,34 +332,61 @@ gcloud auth configure-docker ${ar_location}-docker.pkg.dev --quiet || true
 export N8N_IMAGE="${n8n_ar_image}"
 export CLOUDFLARED_IMAGE="${cloudflared_ar_image}"
 
-echo "=== Pulling n8n image ==="
-if timeout 600 docker pull "$N8N_IMAGE" 2>/dev/null; then
-  echo "✅ Pulled n8n from Artifact Registry"
-else
-  echo "⚠️  AR miss, falling back to public registry for n8n"
-  export N8N_IMAGE="${n8n_image}"
-  retry timeout 1800 docker pull "$N8N_IMAGE" || {
-    echo "❌ Docker pull failed"
-    free -m
-    exit 1
-  }
-fi
+# Pull both images in parallel for ~20-40% faster startup.
+# Each subshell tries AR first, falls back to public on miss.
+pull_n8n() {
+  echo "=== Pulling n8n image ==="
+  if timeout 600 docker pull "$N8N_IMAGE" 2>/dev/null; then
+    echo "✅ Pulled n8n from Artifact Registry"
+  else
+    echo "⚠️  AR miss, falling back to public registry for n8n"
+    N8N_IMAGE="${n8n_image}"
+    retry timeout 1800 docker pull "$N8N_IMAGE" || {
+      echo "❌ Docker pull failed"
+      free -m
+      return 1
+    }
+  fi
+  echo "$N8N_IMAGE" > /tmp/.n8n_image_resolved
+}
 
-echo "=== Pulling cloudflared image ==="
-if timeout 300 docker pull "$CLOUDFLARED_IMAGE" 2>/dev/null; then
-  echo "✅ Pulled cloudflared from Artifact Registry"
-else
-  echo "⚠️  AR miss, falling back to public registry for cloudflared"
-  export CLOUDFLARED_IMAGE="${cloudflared_image}"
-  retry timeout 600 docker pull "$CLOUDFLARED_IMAGE"
-fi
+pull_cf() {
+  echo "=== Pulling cloudflared image ==="
+  if timeout 300 docker pull "$CLOUDFLARED_IMAGE" 2>/dev/null; then
+    echo "✅ Pulled cloudflared from Artifact Registry"
+  else
+    echo "⚠️  AR miss, falling back to public registry for cloudflared"
+    CLOUDFLARED_IMAGE="${cloudflared_image}"
+    retry timeout 600 docker pull "$CLOUDFLARED_IMAGE"
+  fi
+  echo "$CLOUDFLARED_IMAGE" > /tmp/.cf_image_resolved
+}
 
-# Persist resolved images to .env so manual docker compose operations
-# (up, pull, restart) work after startup.sh exits.
-{
-  echo "N8N_IMAGE=$N8N_IMAGE"
-  echo "CLOUDFLARED_IMAGE=$CLOUDFLARED_IMAGE"
-} >> /opt/n8n/.env
+pull_n8n &
+N8N_PID=$!
+pull_cf &
+CF_PID=$!
+
+# Wait for both pulls; fail if n8n pull failed
+wait "$N8N_PID" || { echo "❌ n8n image pull failed"; exit 1; }
+wait "$CF_PID"  || { echo "❌ cloudflared image pull failed"; exit 1; }
+
+# Read resolved image names from subshells
+N8N_IMAGE=$(cat /tmp/.n8n_image_resolved)
+export N8N_IMAGE
+CLOUDFLARED_IMAGE=$(cat /tmp/.cf_image_resolved)
+export CLOUDFLARED_IMAGE
+
+# Rewrite .env with secrets + resolved images so manual docker compose
+# operations (up, pull, restart) work after startup.sh exits.
+cat > /opt/n8n/.env <<EOF
+CF_TOKEN=$CF_TOKEN
+N8N_KEY=$N8N_KEY
+DB_PASSWORD=$DB_PASSWORD
+N8N_IMAGE=$N8N_IMAGE
+CLOUDFLARED_IMAGE=$CLOUDFLARED_IMAGE
+EOF
+chmod 600 /opt/n8n/.env
 
 echo "Using images: n8n=$N8N_IMAGE cloudflared=$CLOUDFLARED_IMAGE"
 docker compose config >/dev/null || { echo "❌ Invalid docker-compose.yml"; exit 1; }
