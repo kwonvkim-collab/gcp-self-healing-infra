@@ -24,6 +24,8 @@ jobs:
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "1.14.9"
 
       # -backend=false — no real GCS bucket needed for validation
       - name: Terraform Init
