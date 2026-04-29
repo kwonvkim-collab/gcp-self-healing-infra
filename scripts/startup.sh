@@ -77,7 +77,8 @@ retry systemctl restart docker
 systemctl enable docker
 systemctl enable containerd
 
-echo "=== Get Secrets from Secret Manager ==="
+echo "=== Configure Artifact Registry ==="
+gcloud auth configure-docker ${ar_location}-docker.pkg.dev --quiet || true
 
 echo "=== Get Secrets from Secret Manager ==="
 DB_PASSWORD=$(gcloud secrets versions access latest --secret="${DB_SECRET_NAME}") || { 
@@ -109,7 +110,7 @@ cat <<EOF > docker-compose.yml
 version: '3.8'
 services:
   n8n:
-    image: docker.n8n.io/n8nio/n8n:2.16.1
+    image: ${n8n_image}
     restart: unless-stopped
     ports:
       - "5678:5678"
@@ -137,7 +138,7 @@ services:
       start_period: 420s
 
   cloudflared:
-    image: cloudflare/cloudflared:2026.3.0
+    image: ${cloudflared_image}
     restart: unless-stopped
     command: tunnel --metrics 0.0.0.0:2000 run
     environment:
@@ -147,8 +148,15 @@ EOF
 docker compose config || { echo "❌ Invalid docker-compose.yml"; exit 1; }
 
 echo "=== Pulling containers ==="
-# На e2-micro pull может занять вечность, увеличиваем таймаут
-retry timeout 1800 docker compose pull
+if timeout 600 docker compose pull; then
+  echo "✅ Pulled from Artifact Registry"
+else
+  echo "⚠️  AR pull failed, falling back to public registries"
+  sed -i "s|${n8n_image}|${n8n_public_image}|g" docker-compose.yml
+  sed -i "s|${cloudflared_image}|${cloudflared_public_image}|g" docker-compose.yml
+  docker compose config || { echo "❌ Invalid docker-compose.yml after fallback"; exit 1; }
+  retry timeout 1800 docker compose pull
+fi
 
 echo "=== Starting Containers ==="
 docker compose up -d

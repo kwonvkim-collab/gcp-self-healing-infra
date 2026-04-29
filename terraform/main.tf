@@ -25,7 +25,8 @@ resource "google_project_service" "required" {
     "secretmanager.googleapis.com",
     "iam.googleapis.com",
     "logging.googleapis.com",
-    "monitoring.googleapis.com"
+    "monitoring.googleapis.com",
+    "artifactregistry.googleapis.com"
   ])
 
   service = each.key
@@ -104,7 +105,41 @@ resource "google_secret_manager_secret_iam_member" "cf_token_access" {
 }
 
 # ==========================================
-# 2. COMPUTE RESOURCES
+# 2. ARTIFACT REGISTRY (pre-pulled images)
+# ==========================================
+
+resource "google_artifact_registry_repository" "docker" {
+  location      = var.region
+  repository_id = "n8n-docker"
+  format        = "DOCKER"
+  description   = "Pre-pulled Docker images for n8n infrastructure"
+
+  cleanup_policies {
+    id     = "keep-last-3"
+    action = "KEEP"
+    most_recent_versions {
+      keep_count = 3
+    }
+  }
+}
+
+resource "google_artifact_registry_repository_iam_member" "vm_reader" {
+  location   = google_artifact_registry_repository.docker.location
+  repository = google_artifact_registry_repository.docker.repository_id
+  role       = "roles/artifactregistry.reader"
+  member     = "serviceAccount:${google_service_account.vm_sa.email}"
+}
+
+locals {
+  ar_prefix         = "${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.docker.repository_id}"
+  n8n_image         = "${local.ar_prefix}/n8n:${var.n8n_version}"
+  cloudflared_image = "${local.ar_prefix}/cloudflared:${var.cloudflared_version}"
+  n8n_public_image  = "docker.n8n.io/n8nio/n8n:${var.n8n_version}"
+  cf_public_image   = "cloudflare/cloudflared:${var.cloudflared_version}"
+}
+
+# ==========================================
+# 3. COMPUTE RESOURCES
 # ==========================================
 
 resource "google_compute_health_check" "hc" {
@@ -152,13 +187,18 @@ resource "google_compute_instance_template" "tpl" {
 
   metadata = {
     startup-script = templatefile("${path.module}/../scripts/startup.sh", {
-      db_host               = var.db_host
-      db_user               = var.db_user
-      DB_SECRET_NAME        = google_secret_manager_secret.db_password.secret_id
-      N8N_KEY_SECRET_NAME   = google_secret_manager_secret.n8n_key.secret_id
-      CF_TUNNEL_SECRET_NAME = google_secret_manager_secret.cf_token.secret_id
-      db_name               = "postgres"
-      db_port               = "5432"
+      db_host                  = var.db_host
+      db_user                  = var.db_user
+      DB_SECRET_NAME           = google_secret_manager_secret.db_password.secret_id
+      N8N_KEY_SECRET_NAME      = google_secret_manager_secret.n8n_key.secret_id
+      CF_TUNNEL_SECRET_NAME    = google_secret_manager_secret.cf_token.secret_id
+      db_name                  = "postgres"
+      db_port                  = "5432"
+      ar_location              = var.region
+      n8n_image                = local.n8n_image
+      cloudflared_image        = local.cloudflared_image
+      n8n_public_image         = local.n8n_public_image
+      cloudflared_public_image = local.cf_public_image
     })
   }
 
@@ -182,12 +222,15 @@ resource "google_compute_instance_group_manager" "mig" {
     initial_delay_sec = 2400 # chamge because sometimes update takes time
   }
 
+  # Canary update: new VM created alongside old; old removed only after
+  # the new instance passes the health check.  If the new VM never becomes
+  # healthy the old one keeps serving traffic.
   update_policy {
     type                  = "PROACTIVE"
     minimal_action        = "REPLACE"
-    max_surge_fixed       = 0
-    max_unavailable_fixed = 1
-    replacement_method    = "RECREATE"
+    max_surge_fixed       = 1
+    max_unavailable_fixed = 0
+    replacement_method    = "SUBSTITUTE"
   }
 }
 

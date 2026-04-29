@@ -52,6 +52,8 @@ jobs:
           TF_VAR_project_id: ${{ vars.TF_VAR_project_id }}
           TF_VAR_db_host: ${{ vars.TF_VAR_db_host }}
           TF_VAR_db_user: ${{ vars.TF_VAR_db_user }}
+          TF_VAR_n8n_version: ${{ vars.TF_VAR_n8n_version || '2.16.1' }}
+          TF_VAR_cloudflared_version: ${{ vars.TF_VAR_cloudflared_version || '2026.3.0' }}
 
       - name: Terraform Apply
         run: terraform apply -auto-approve tfplan
@@ -63,3 +65,29 @@ jobs:
           TF_VAR_project_id: ${{ vars.TF_VAR_project_id }}
           TF_VAR_db_host: ${{ vars.TF_VAR_db_host }}
           TF_VAR_db_user: ${{ vars.TF_VAR_db_user }}
+          TF_VAR_n8n_version: ${{ vars.TF_VAR_n8n_version || '2.16.1' }}
+          TF_VAR_cloudflared_version: ${{ vars.TF_VAR_cloudflared_version || '2026.3.0' }}
+
+      # Mirror public Docker images into Artifact Registry so that
+      # subsequent VM boots pull from the same GCP region (fast + no
+      # Docker Hub rate-limits).
+      - name: Mirror images to Artifact Registry
+        working-directory: .
+        run: |
+          N8N_VER="${{ vars.TF_VAR_n8n_version || '2.16.1' }}"
+          CF_VER="${{ vars.TF_VAR_cloudflared_version || '2026.3.0' }}"
+          PROJECT="${{ vars.TF_VAR_project_id }}"
+          REGION="${{ vars.TF_VAR_region || 'us-central1' }}"
+          AR="${REGION}-docker.pkg.dev/${PROJECT}/n8n-docker"
+
+          gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+
+          for PAIR in "docker.n8n.io/n8nio/n8n:${N8N_VER} ${AR}/n8n:${N8N_VER}" \
+                      "cloudflare/cloudflared:${CF_VER} ${AR}/cloudflared:${CF_VER}"; do
+            SRC="${PAIR%% *}"
+            DST="${PAIR#* }"
+            echo ">>> Mirroring ${SRC} → ${DST}"
+            docker pull "${SRC}"
+            docker tag  "${SRC}" "${DST}"
+            docker push "${DST}"
+          done
