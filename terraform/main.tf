@@ -330,9 +330,16 @@ resource "google_artifact_registry_repository_iam_member" "vm_reader" {
 }
 
 locals {
-  ar_prefix    = "${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.docker.repository_id}"
-  n8n_ar_image = "${local.ar_prefix}/n8n:${var.n8n_image_tag}"
-  cf_ar_image  = "${local.ar_prefix}/cloudflared:${var.cloudflared_image_tag}"
+  ar_prefix = "${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.docker.repository_id}"
+
+  # Include first 8 chars of the digest in the AR tag so that a digest-only
+  # bump (e.g. weekly digest-refresh) produces a different AR tag.  This
+  # prevents the race where a new VM pulls a stale image from AR before the
+  # CI mirror step has pushed the new digest.
+  n8n_digest_short = substr(element(split("@sha256:", var.n8n_image), 1), 0, 8)
+  cf_digest_short  = substr(element(split("@sha256:", var.cloudflared_image), 1), 0, 8)
+  n8n_ar_image     = "${local.ar_prefix}/n8n:${var.n8n_image_tag}-${local.n8n_digest_short}"
+  cf_ar_image      = "${local.ar_prefix}/cloudflared:${var.cloudflared_image_tag}-${local.cf_digest_short}"
 }
 
 # ==========================================
