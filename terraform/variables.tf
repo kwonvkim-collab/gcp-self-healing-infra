@@ -15,20 +15,6 @@ variable "zone" {
   default     = "us-central1-a"
 }
 
-# --------------------------------------------------------
-# Resilience & DR (Phase 4 of docs/slo-roadmap)
-# --------------------------------------------------------
-# Zones the regional MIG is allowed to place the single VM in. Free Tier
-# still applies: at any instant exactly one e2-micro runs, anywhere in
-# us-central1. But on a zonal incident the MIG relocates to a surviving
-# zone, which is the entire point of moving off the old single-zone
-# google_compute_instance_group_manager.
-variable "mig_zones" {
-  description = "Zones the regional MIG may place its single VM in. Must all be within var.region. For us-central1 the Free-Tier-eligible zones are a/b/f."
-  type        = list(string)
-  default     = ["us-central1-a", "us-central1-b", "us-central1-f"]
-}
-
 variable "data_disk_size_gb" {
   description = "Size in GB for the persistent data disk (Postgres). 10GB is the GCP Free Tier minimum for pd-standard. Increase if n8n DB grows beyond this."
   type        = number
