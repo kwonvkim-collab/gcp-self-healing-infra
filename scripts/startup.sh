@@ -38,14 +38,15 @@ echo "=== Install Docker ==="
 if command -v docker >/dev/null 2>&1 && command -v gcloud >/dev/null 2>&1; then
   echo "✅ Docker and gcloud already installed, skipping apt"
 else
-  retry apt-get update
-  retry apt-get install "$${APT_INSTALL_OPTS[@]}" ca-certificates curl gnupg docker.io cron postgresql-client 
-  retry apt-get install "$${APT_INSTALL_OPTS[@]}" apt-transport-https 
+  # Add Google Cloud SDK repo before the single apt-get update
   echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" > /etc/apt/sources.list.d/google-cloud-sdk.list
   curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | \
-  gpg --dearmor --yes -o /usr/share/keyrings/cloud.google.gpg
+    gpg --dearmor --yes -o /usr/share/keyrings/cloud.google.gpg
+
+  # Single update + single install (saves 30-60s vs two rounds)
   retry apt-get update
-  retry apt-get install "$${APT_INSTALL_OPTS[@]}" google-cloud-cli
+  retry apt-get install "$${APT_INSTALL_OPTS[@]}" \
+    docker.io cron postgresql-client google-cloud-cli
 fi
 
 
