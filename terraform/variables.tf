@@ -15,18 +15,10 @@ variable "zone" {
   default     = "us-central1-a"
 }
 
-# --------------------------------------------------------
-# Resilience & DR (Phase 4 of docs/slo-roadmap)
-# --------------------------------------------------------
-# Zones the regional MIG is allowed to place the single VM in. Free Tier
-# still applies: at any instant exactly one e2-micro runs, anywhere in
-# us-central1. But on a zonal incident the MIG relocates to a surviving
-# zone, which is the entire point of moving off the old single-zone
-# google_compute_instance_group_manager.
-variable "mig_zones" {
-  description = "Zones the regional MIG may place its single VM in. Must all be within var.region. For us-central1 the Free-Tier-eligible zones are a/b/f."
-  type        = list(string)
-  default     = ["us-central1-a", "us-central1-b", "us-central1-f"]
+variable "data_disk_size_gb" {
+  description = "Size in GB for the persistent data disk (Postgres). 10GB is the GCP Free Tier minimum for pd-standard. Increase if n8n DB grows beyond this."
+  type        = number
+  default     = 10
 }
 
 variable "billing_account_id" {
@@ -198,10 +190,22 @@ variable "n8n_image" {
   default     = "docker.n8n.io/n8nio/n8n:2.17.7@sha256:a293b89bac876872a0c1ef0fbbb7ce056aa2d215f62917acf032ecb8010199af"
 }
 
+variable "n8n_image_tag" {
+  description = "Short tag for n8n image, used to reference the Artifact Registry mirror. Must match the tag portion of var.n8n_image."
+  type        = string
+  default     = "2.17.7"
+}
+
 variable "cloudflared_image" {
   description = "cloudflared container image, including registry, repo, tag and SHA256 digest. Used by scripts/startup.sh in the docker-compose service definition."
   type        = string
   default     = "cloudflare/cloudflared:2026.3.0@sha256:6b599ca3e974349ead3286d178da61d291961182ec3fe9c505e1dd02c8ac31b0"
+}
+
+variable "cloudflared_image_tag" {
+  description = "Short tag for cloudflared image, used to reference the Artifact Registry mirror. Must match the tag portion of var.cloudflared_image."
+  type        = string
+  default     = "2026.3.0"
 }
 
 # --------------------------------------------------------
@@ -248,6 +252,12 @@ variable "wif_provider_id" {
   default     = ""
 }
 
+
+variable "ci_sa_email" {
+  description = "Service account email used by CI (GitHub Actions WIF SA). When set, grants IAP tunnel access for SSH-based in-place app deploys. Leave empty to skip IAP IAM setup."
+  type        = string
+  default     = ""
+}
 
 variable "backup_bucket_name" {
   type = string

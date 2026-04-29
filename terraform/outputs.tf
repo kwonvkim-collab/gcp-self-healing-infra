@@ -125,3 +125,29 @@ output "billing_budget_name" {
   description = "Resource name of the monthly spend cap billing budget. Null when var.billing_account_id is empty (budget opted out). Edit the thresholds / amount by changing var.monthly_budget_usd and re-applying."
   value       = length(google_billing_budget.monthly_cap) > 0 ? google_billing_budget.monthly_cap[0].name : null
 }
+
+# Artifact Registry (image cache)
+output "artifact_registry_repository" {
+  description = "Artifact Registry repository URL for pre-pulled Docker images"
+  value       = "${google_artifact_registry_repository.docker.location}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.docker.repository_id}"
+}
+
+output "n8n_image_source" {
+  description = "Public n8n image reference (digest-pinned) used as mirror source"
+  value       = var.n8n_image
+}
+
+output "cloudflared_image_source" {
+  description = "Public cloudflared image reference (digest-pinned) used as mirror source"
+  value       = var.cloudflared_image
+}
+
+output "n8n_ar_image" {
+  description = "Artifact Registry n8n image reference (tag-only, populated by CI mirror step)"
+  value       = local.n8n_ar_image
+}
+
+output "cloudflared_ar_image" {
+  description = "Artifact Registry cloudflared image reference (tag-only, populated by CI mirror step)"
+  value       = local.cf_ar_image
+}

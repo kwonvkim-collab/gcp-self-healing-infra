@@ -43,6 +43,7 @@ resource "google_project_service" "required" {
     # but makes the private IP creation path work once peering is in
     # place.
     "servicenetworking.googleapis.com",
+    "artifactregistry.googleapis.com",
   ])
 
   service = each.key
@@ -299,7 +300,63 @@ resource "google_storage_bucket" "logs_audit" {
 }
 
 # ==========================================
-# 2. COMPUTE RESOURCES
+# 2. ARTIFACT REGISTRY (regional image cache)
+# ==========================================
+# Mirror public Docker images (n8n, cloudflared) into the same GCP region
+# so VM boots pull locally instead of crossing the internet to Docker Hub.
+# Reduces cold-start pull from ~8 min to ~1 min on e2-micro and avoids
+# Docker Hub anonymous rate limits (100 pulls / 6h).
+
+resource "google_artifact_registry_repository" "docker" {
+  location      = var.region
+  repository_id = "n8n-docker"
+  format        = "DOCKER"
+  description   = "Pre-pulled Docker images for n8n infrastructure"
+
+  cleanup_policies {
+    id     = "delete-old"
+    action = "DELETE"
+  }
+
+  cleanup_policies {
+    id     = "keep-last-3"
+    action = "KEEP"
+    most_recent_versions {
+      keep_count = 3
+    }
+  }
+}
+
+resource "google_artifact_registry_repository_iam_member" "vm_reader" {
+  location   = google_artifact_registry_repository.docker.location
+  repository = google_artifact_registry_repository.docker.repository_id
+  role       = "roles/artifactregistry.reader"
+  member     = "serviceAccount:${google_service_account.vm_sa.email}"
+}
+
+resource "google_artifact_registry_repository_iam_member" "ci_writer" {
+  count      = var.ci_sa_email != "" ? 1 : 0
+  location   = google_artifact_registry_repository.docker.location
+  repository = google_artifact_registry_repository.docker.repository_id
+  role       = "roles/artifactregistry.writer"
+  member     = "serviceAccount:${var.ci_sa_email}"
+}
+
+locals {
+  ar_prefix = "${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.docker.repository_id}"
+
+  # Include first 8 chars of the digest in the AR tag so that a digest-only
+  # bump (e.g. weekly digest-refresh) produces a different AR tag.  This
+  # prevents the race where a new VM pulls a stale image from AR before the
+  # CI mirror step has pushed the new digest.
+  n8n_digest_short = substr(element(split("@sha256:", var.n8n_image), 1), 0, 8)
+  cf_digest_short  = substr(element(split("@sha256:", var.cloudflared_image), 1), 0, 8)
+  n8n_ar_image     = "${local.ar_prefix}/n8n:${var.n8n_image_tag}-${local.n8n_digest_short}"
+  cf_ar_image      = "${local.ar_prefix}/cloudflared:${var.cloudflared_image_tag}-${local.cf_digest_short}"
+}
+
+# ==========================================
+# 3. COMPUTE RESOURCES
 # ==========================================
 
 resource "google_compute_health_check" "hc" {
@@ -344,6 +401,17 @@ resource "google_compute_instance_template" "tpl" {
     boot         = true
   }
 
+  # Persistent data disk for Postgres. Survives VM recreation via MIG
+  # stateful_disk config below — data is 100% intact across deploys.
+  # Device name maps to /dev/disk/by-id/google-n8n-data in the guest OS.
+  disk {
+    device_name  = "n8n-data"
+    disk_size_gb = var.data_disk_size_gb
+    disk_type    = "pd-standard"
+    auto_delete  = false
+    boot         = false
+  }
+
   # Shielded VM (Secure Boot + vTPM + integrity monitoring). Free-Tier
   # compatible; protects against boot-time rootkits and kernel-level
   # tampering. Closes Checkov CKV_GCP_39.
@@ -374,10 +442,11 @@ resource "google_compute_instance_template" "tpl" {
   }
 
   metadata = {
-    # Block OS-login / project-wide SSH keys. Runbook procedures do not
-    # rely on interactive SSH — everything is either a `terraform apply`
-    # or a serial-console break-glass. Closes Checkov CKV_GCP_32.
+    # Block project-wide SSH keys — only OS Login is allowed for SSH.
+    # Closes Checkov CKV_GCP_32. CI uses OS Login via IAP for in-place
+    # app deploys (app-deploy.yml).
     block-project-ssh-keys = "true"
+    enable-oslogin         = "TRUE"
     startup-script = templatefile("${path.module}/../scripts/startup.sh", {
       db_host               = local.effective_db_host
       db_user               = var.db_user
@@ -388,6 +457,9 @@ resource "google_compute_instance_template" "tpl" {
       db_port               = "5432"
       n8n_image             = var.n8n_image
       cloudflared_image     = var.cloudflared_image
+      n8n_ar_image          = local.n8n_ar_image
+      cloudflared_ar_image  = local.cf_ar_image
+      ar_location           = var.region
       BACKUP_BUCKET_NAME    = var.backup_bucket_name
     })
   }
@@ -411,54 +483,60 @@ resource "google_compute_instance_template" "tpl" {
 }
 
 # ==========================================
-# Managed Instance Group (regional, Phase 4)
+# Managed Instance Group (regional, Phase 4 → Phase 5: stateful disk)
 # ==========================================
-# Replaces the previous zonal google_compute_instance_group_manager. The
-# MIG still runs a single e2-micro (target_size=1, Free Tier compliant),
-# but it is now free to place that VM in any zone of us-central1 listed
-# in var.mig_zones. Practical effect on SLO: a zonal outage (whole AZ
-# goes dark) no longer keeps the VM dead — MIG's self-healing path tries
-# a surviving zone on the next replacement. Expected zonal-failover MTTR
-# is the same as cold start (≆17 min worst case) because the replacement
-# path always runs full startup.sh on a fresh VM.
+# Single e2-micro (target_size=1, Free Tier compliant) with a persistent
+# data disk for Postgres. The MIG is pinned to var.zone because the data
+# disk is zonal — it cannot be attached cross-zone. Trade-off: we lose
+# multi-zone failover (Phase 4 benefit) but gain zero-data-loss deploys.
+# To restore multi-zone resilience, enable Cloud SQL (var.cloud_sql_managed)
+# which externalizes the DB and allows SUBSTITUTE + multi-zone MIG.
 #
-# State-migration note: on first apply the old zonal resource is
-# destroyed and this regional resource is created. Brief downtime during
-# the cutover is expected; see Runbook §Backup & DR for the procedure.
+# Update strategy: RECREATE (not SUBSTITUTE/canary) because a persistent
+# disk cannot be attached to two VMs simultaneously. On template change:
+# MIG deletes old VM → detaches data disk → creates new VM → attaches
+# same data disk → Postgres starts with 100% current data. Downtime
+# equals VM boot time (~1-2 min with AR image cache).
+#
+# Backup cron remains as DR for catastrophic disk failure, not for deploys.
 resource "google_compute_region_instance_group_manager" "mig" {
   name                      = "n8n-mig"
   base_instance_name        = "n8n"
   region                    = var.region
-  distribution_policy_zones = var.mig_zones
+  distribution_policy_zones = [var.zone]
   target_size               = 1
 
   version {
     instance_template = google_compute_instance_template.tpl.id
   }
 
-  auto_healing_policies {
-    health_check = google_compute_health_check.hc.id
-    # 600s > Docker start_period (420s) + 3 min safety margin.
-    # startup.sh on e2-micro must do: apt update + install docker + pull two
-    # container images (n8n is ~500MB uncompressed) + start containers + run
-    # n8n DB migrations. Cold path takes 6–10 min; giving MIG 10 min before
-    # it starts probing avoids spurious recreation during legitimate boot.
-    #
-    # After initial_delay expires, GCP probes /healthz every 10s. With
-    # unhealthy_threshold=5 and check_interval=10s, detection takes ~50s, so
-    # worst-case cold MTTR ≈ 600 (initial_delay) + 50 (detection) + 360
-    # (new-VM startup) ≈ 17 min. Warm replace after template change: ~6 min
-    # (no initial_delay on the replacement path, only detection + startup).
-    initial_delay_sec = 1800
+  # Preserve the data disk across instance recreations. MIG detaches it
+  # from the dying VM and reattaches to the replacement — Postgres data
+  # survives every deploy, auto-heal, and manual recreation.
+  stateful_disk {
+    device_name = "n8n-data"
+    delete_rule = "NEVER"
   }
 
+  auto_healing_policies {
+    health_check = google_compute_health_check.hc.id
+    # With persistent disk + AR cache, cold start is ~2-4 min (no backup
+    # restore, images pulled from same-region AR). 600s initial delay
+    # gives ample safety margin.
+    initial_delay_sec = 600
+  }
+
+  # RECREATE: old VM deleted before new one starts. Required because the
+  # persistent data disk cannot be attached to two VMs at once.
+  # Brief downtime (~1-2 min) is acceptable for single-instance behind
+  # Cloudflare Tunnel. For zero-downtime, enable Cloud SQL + SUBSTITUTE.
   update_policy {
     type                         = "PROACTIVE"
     minimal_action               = "REPLACE"
     max_surge_fixed              = 0
-    max_unavailable_fixed        = length(var.mig_zones) # must be ≥ number of distribution zones on a regional MIG
+    max_unavailable_fixed        = 1
     replacement_method           = "RECREATE"
-    instance_redistribution_type = "NONE" # target_size=1; redistribution is meaningless and would cause needless relocations
+    instance_redistribution_type = "NONE"
   }
 }
 
@@ -529,6 +607,50 @@ resource "google_billing_budget" "monthly_cap" {
   depends_on = [google_project_service.required]
 }
 
+
+# ==========================================
+# IAP SSH — In-place app deploys from CI
+# ==========================================
+# GitHub Actions uses `gcloud compute ssh --tunnel-through-iap` to update
+# Docker containers without recreating the VM. The firewall rule allows
+# IAP's IP range (35.235.240.0/20) to reach port 22 on n8n-tagged VMs.
+# IAM bindings grant the CI service account tunnel access, OS Login,
+# and AR writer. All are conditional on var.ci_sa_email being set.
+
+resource "google_compute_firewall" "allow_iap_ssh" {
+  name    = "allow-iap-ssh"
+  network = "default"
+
+  allow {
+    protocol = "tcp"
+    ports    = ["22"]
+  }
+
+  # IAP's well-known IP range for TCP forwarding
+  source_ranges = ["35.235.240.0/20"]
+  target_tags   = ["n8n"]
+}
+
+resource "google_project_iam_member" "ci_iap_tunnel" {
+  count   = var.ci_sa_email != "" ? 1 : 0
+  project = var.project_id
+  role    = "roles/iap.tunnelResourceAccessor"
+  member  = "serviceAccount:${var.ci_sa_email}"
+}
+
+resource "google_project_iam_member" "ci_compute_viewer" {
+  count   = var.ci_sa_email != "" ? 1 : 0
+  project = var.project_id
+  role    = "roles/compute.viewer"
+  member  = "serviceAccount:${var.ci_sa_email}"
+}
+
+resource "google_project_iam_member" "ci_os_login" {
+  count   = var.ci_sa_email != "" ? 1 : 0
+  project = var.project_id
+  role    = "roles/compute.osLogin"
+  member  = "serviceAccount:${var.ci_sa_email}"
+}
 
 resource "google_compute_firewall" "allow_health_check" {
   name    = "allow-health-check"

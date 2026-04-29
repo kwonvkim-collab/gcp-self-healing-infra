@@ -34,15 +34,51 @@ retry() {
   return 1
 }
 
+echo "=== Mount Persistent Data Disk ==="
+DATA_DISK="/dev/disk/by-id/google-n8n-data"
+DATA_MOUNT="/mnt/data"
+
+if [ -b "$DATA_DISK" ]; then
+  mkdir -p "$DATA_MOUNT"
+
+  # Format only if the disk has no filesystem (first boot)
+  if ! blkid "$DATA_DISK" >/dev/null 2>&1; then
+    echo "Formatting new data disk..."
+    mkfs.ext4 -m 0 -F -E lazy_itable_init=0,lazy_journal_init=0 "$DATA_DISK"
+  else
+    # Check and repair filesystem before mount (protection against corruption)
+    fsck -a "$DATA_DISK" || true
+  fi
+
+  mount -o discard,defaults "$DATA_DISK" "$DATA_MOUNT" || {
+    echo "❌ Failed to mount data disk"
+    exit 1
+  }
+  echo "✅ Data disk mounted at $DATA_MOUNT"
+
+  # Ensure Postgres data directory exists
+  mkdir -p "$DATA_MOUNT/postgres"
+  chown -R 999:999 "$DATA_MOUNT/postgres"
+else
+  echo "⚠️ Data disk not found at $DATA_DISK — using ephemeral storage"
+  mkdir -p /mnt/data/postgres
+  chown -R 999:999 /mnt/data/postgres
+fi
+
 echo "=== Install Docker ==="
-retry apt-get update
-retry apt-get install "$${APT_INSTALL_OPTS[@]}" ca-certificates curl gnupg docker.io cron postgresql-client 
-retry apt-get install "$${APT_INSTALL_OPTS[@]}" apt-transport-https 
-echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" > /etc/apt/sources.list.d/google-cloud-sdk.list
-curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | \
-gpg --dearmor --yes -o /usr/share/keyrings/cloud.google.gpg
-retry apt-get update
-retry apt-get install "$${APT_INSTALL_OPTS[@]}" google-cloud-cli
+if command -v docker >/dev/null 2>&1 && command -v gcloud >/dev/null 2>&1; then
+  echo "✅ Docker and gcloud already installed, skipping apt"
+else
+  # Add Google Cloud SDK repo before the single apt-get update
+  echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" > /etc/apt/sources.list.d/google-cloud-sdk.list
+  curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | \
+    gpg --dearmor --yes -o /usr/share/keyrings/cloud.google.gpg
+
+  # Single update + single install (saves 30-60s vs two rounds)
+  retry apt-get update
+  retry apt-get install "$${APT_INSTALL_OPTS[@]}" --no-install-recommends \
+    docker.io cron postgresql-client google-cloud-cli
+fi
 
 
 
@@ -219,6 +255,8 @@ echo "=== Pre-flight Variables Check ==="
 
 [ -z "${n8n_image}" ] && { echo "❌ n8n_image is empty"; exit 1; }
 [ -z "${cloudflared_image}" ] && { echo "❌ cloudflared_image is empty"; exit 1; }
+[ -z "${n8n_ar_image}" ] && { echo "❌ n8n_ar_image is empty"; exit 1; }
+[ -z "${cloudflared_ar_image}" ] && { echo "❌ cloudflared_ar_image is empty"; exit 1; }
 [ -z "${BACKUP_BUCKET_NAME}" ] && { echo "❌ BACKUP_BUCKET_NAME is empty"; exit 1; }
 
 echo "✅ All required variables present"
@@ -241,9 +279,9 @@ services:
       timeout: 3s
       retries: 5
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - /mnt/data/postgres:/var/lib/postgresql/data
   n8n:
-    image: ${n8n_image}
+    image: $${N8N_IMAGE}
     restart: unless-stopped
     ports:
         - "127.0.0.1:5678:5678"
@@ -300,7 +338,7 @@ services:
         condition: service_healthy
         
   cloudflared:
-    image: ${cloudflared_image}
+    image: $${CLOUDFLARED_IMAGE}
     restart: unless-stopped
     command: tunnel --no-autoupdate --protocol http2 --metrics 0.0.0.0:2000 run --token $${CF_TOKEN}
     ports:
@@ -310,28 +348,62 @@ services:
     depends_on:
       n8n:
         condition: service_healthy
-volumes:
-    postgres_data:
 EOF
-
-docker compose config >/dev/null || { echo "❌ Invalid docker-compose.yml"; exit 1; }
 
 echo "=== Cleaning package cache before image pull ==="
 apt-get clean
 rm -rf /var/lib/apt/lists/*
 
+echo "=== Configure Artifact Registry ==="
+gcloud auth configure-docker ${ar_location}-docker.pkg.dev --quiet || true
 
+# Default to Artifact Registry (same region → fast pull).
+# If AR pull fails, fall back to the public digest-pinned reference.
+export N8N_IMAGE="${n8n_ar_image}"
+export CLOUDFLARED_IMAGE="${cloudflared_ar_image}"
 
+# Sequential pull: n8n first (critical), then cloudflared.
+# e2-micro has limited RAM/CPU — parallel pulls risk OOM or disk throttling.
+# Cache check: skip pull entirely if image already present (saves 5-20s).
 echo "=== Pulling n8n image ==="
-retry timeout 1800 docker pull "${n8n_image}" || {
-  echo "❌ Docker pull failed"
-  free -m
-  exit 1
-}
-
+if docker image inspect "$N8N_IMAGE" >/dev/null 2>&1; then
+  echo "✅ n8n image already cached"
+elif timeout 600 docker pull "$N8N_IMAGE" 2>/dev/null; then
+  echo "✅ Pulled n8n from Artifact Registry"
+else
+  echo "⚠️  AR miss, falling back to public registry for n8n"
+  export N8N_IMAGE="${n8n_image}"
+  retry timeout 1800 docker pull "$N8N_IMAGE" || {
+    echo "❌ Docker pull failed"
+    free -m
+    exit 1
+  }
+fi
 
 echo "=== Pulling cloudflared image ==="
-retry timeout 600 docker pull "${cloudflared_image}"
+if docker image inspect "$CLOUDFLARED_IMAGE" >/dev/null 2>&1; then
+  echo "✅ cloudflared image already cached"
+elif timeout 300 docker pull "$CLOUDFLARED_IMAGE" 2>/dev/null; then
+  echo "✅ Pulled cloudflared from Artifact Registry"
+else
+  echo "⚠️  AR miss, falling back to public registry for cloudflared"
+  export CLOUDFLARED_IMAGE="${cloudflared_image}"
+  retry timeout 600 docker pull "$CLOUDFLARED_IMAGE"
+fi
+
+# Rewrite .env with secrets + resolved images so manual docker compose
+# operations (up, pull, restart) work after startup.sh exits.
+cat > /opt/n8n/.env <<EOF
+CF_TOKEN=$CF_TOKEN
+N8N_KEY=$N8N_KEY
+DB_PASSWORD=$DB_PASSWORD
+N8N_IMAGE=$N8N_IMAGE
+CLOUDFLARED_IMAGE=$CLOUDFLARED_IMAGE
+EOF
+chmod 600 /opt/n8n/.env
+
+echo "Using images: n8n=$N8N_IMAGE cloudflared=$CLOUDFLARED_IMAGE"
+docker compose config >/dev/null || { echo "❌ Invalid docker-compose.yml"; exit 1; }
 
 
 echo "=== Starting Containers ==="
@@ -367,7 +439,10 @@ fi
 
 
 
-echo "=== Restore latest backup ==="
+echo "=== Backup Restore (DR only) ==="
+# With a persistent data disk, Postgres data survives VM recreation.
+# Restore only runs on first boot (empty PD) or after catastrophic
+# disk failure — it is a DR mechanism, not a deploy mechanism.
 SKIP_RESTORE=false
 
 echo "=== Checking if DB already has data ==="
