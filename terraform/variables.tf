@@ -253,6 +253,12 @@ variable "wif_provider_id" {
 }
 
 
+variable "ci_sa_email" {
+  description = "Service account email used by CI (GitHub Actions WIF SA). When set, grants IAP tunnel access for SSH-based in-place app deploys. Leave empty to skip IAP IAM setup."
+  type        = string
+  default     = ""
+}
+
 variable "backup_bucket_name" {
   type = string
 

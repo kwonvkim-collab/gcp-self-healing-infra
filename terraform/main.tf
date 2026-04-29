@@ -599,6 +599,43 @@ resource "google_billing_budget" "monthly_cap" {
 }
 
 
+# ==========================================
+# IAP SSH — In-place app deploys from CI
+# ==========================================
+# GitHub Actions uses `gcloud compute ssh --tunnel-through-iap` to update
+# Docker containers without recreating the VM. The firewall rule allows
+# IAP's IP range (35.235.240.0/20) to reach port 22 on n8n-tagged VMs.
+# IAM bindings grant the CI service account tunnel access + OS Login.
+# Both are conditional on var.ci_sa_email being set.
+
+resource "google_compute_firewall" "allow_iap_ssh" {
+  name    = "allow-iap-ssh"
+  network = "default"
+
+  allow {
+    protocol = "tcp"
+    ports    = ["22"]
+  }
+
+  # IAP's well-known IP range for TCP forwarding
+  source_ranges = ["35.235.240.0/20"]
+  target_tags   = ["n8n"]
+}
+
+resource "google_project_iam_member" "ci_iap_tunnel" {
+  count   = var.ci_sa_email != "" ? 1 : 0
+  project = var.project_id
+  role    = "roles/iap.tunnelResourceAccessor"
+  member  = "serviceAccount:${var.ci_sa_email}"
+}
+
+resource "google_project_iam_member" "ci_compute_viewer" {
+  count   = var.ci_sa_email != "" ? 1 : 0
+  project = var.project_id
+  role    = "roles/compute.viewer"
+  member  = "serviceAccount:${var.ci_sa_email}"
+}
+
 resource "google_compute_firewall" "allow_health_check" {
   name    = "allow-health-check"
   network = "default"
