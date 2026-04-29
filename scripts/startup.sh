@@ -44,8 +44,8 @@ else
     gpg --dearmor --yes -o /usr/share/keyrings/cloud.google.gpg
 
   # Single update + single install (saves 30-60s vs two rounds)
-  retry apt-get update
-  retry apt-get install "$${APT_INSTALL_OPTS[@]}" \
+  retry apt-get update "$${APT_INSTALL_OPTS[@]}"
+  retry apt-get install "$${APT_INSTALL_OPTS[@]}" --no-install-recommends \
     docker.io cron postgresql-client google-cloud-cli
 fi
 
